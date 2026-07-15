@@ -6,7 +6,7 @@ import { languageFor } from "./editor/languages";
 import { applyCodeScale } from "./editor/scale";
 import { isRunnable, runCode, runCommandLabel } from "./editor/run";
 import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, type GhTree, type GhBranch, type GhFileDelta } from "./github";
-import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, type SyncState } from "./syncengine";
+import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, type SyncState } from "./syncengine";
 import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
 import { Preloader, type PreloadTarget } from "./preload";
 import { Loader } from "./Loader";
@@ -270,6 +270,9 @@ export default function App() {
     [ghTree]
   );
 
+  const loadGhFileRef = useRef(loadGhFile);
+  loadGhFileRef.current = loadGhFile;
+
   const openFileSmart = useCallback(
     (id: string) => {
       loadGhFile(id);
@@ -323,8 +326,33 @@ export default function App() {
   }, []);
  
   const autoPushTimers = useRef(new Map<string, number>());
+  const draftTimers = useRef(new Map<string, number>());
+  const ghTreeRef = useRef<GhTree | null>(null);
+
+  const scheduleDraft = useCallback((fileId: string) => {
+    const meta = ghMeta.current.get(fileId);
+    const tree = ghTreeRef.current;
+    if (!meta || !tree) return;
+    const repo = repoKey(tree.ref);
+    const timers = draftTimers.current;
+    const prev = timers.get(fileId);
+    if (prev !== undefined) window.clearTimeout(prev);
+    timers.set(
+      fileId,
+      window.setTimeout(() => {
+        timers.delete(fileId);
+        const m = ghMeta.current.get(fileId);
+        if (!m) return;
+        const content = getCachedDoc(fileId, m.baseContent);
+        const key = draftKey(repo, m.path);
+        if (m.loaded && content === m.baseContent) void deleteDraft(key);
+        else void saveDraft({ key, repoKey: repo, path: m.path, content, savedAt: Date.now() });
+      }, 350)
+    );
+  }, []);
 
   const onDocChange = useCallback((fileId: string) => {
+    scheduleDraft(fileId);
     if (!autoSaveRef.current) {
       setDirty((d) => (d.has(fileId) ? d : new Set(d).add(fileId)));
       return;
@@ -352,7 +380,7 @@ export default function App() {
         });
       }, 2500)
     );
-  }, []);
+  }, [scheduleDraft]);
  
   const appendConsole = useCallback((lines: ConsoleLine[]) => {
     setConsoleLines((prev) => [...prev, ...lines]);
@@ -422,6 +450,13 @@ export default function App() {
             if (r.newSha) meta.sha = r.newSha;
             meta.baseContent = tx.content;
           }
+          void deleteDraft(draftKey(repoKey(tree.ref), tx.path));
+          setDirty((d) => {
+            if (!d.has(id)) return d;
+            const next = new Set(d);
+            next.delete(id);
+            return next;
+          });
           appendConsole([{ kind: "info", text: `GitHub：${tx.path} ${r.message}` }]);
         },
         onTransactionError: (tx, err, willRetry) => {
@@ -457,12 +492,40 @@ export default function App() {
         };
       });
       setGhTree(tree);
+      ghTreeRef.current = tree;
       setFiles(fs);
-      setOpenIds([]);
-      setActiveId("");
-      setSplitId(null);
+      const repo = repoKey(tree.ref);
+      const idSet = new Set(fs.map((f) => f.id));
+      let openRestored: string[] = [];
+      let activeRestored = "";
+      let splitRestored: string | null = null;
+      try {
+        const raw = localStorage.getItem(`lumen.session.${repo}`);
+        if (raw) {
+          const s = JSON.parse(raw) as { open?: string[]; active?: string; split?: string | null };
+          openRestored = (s.open ?? []).filter((x) => idSet.has(x));
+          activeRestored = s.active && idSet.has(s.active) ? s.active : openRestored[0] ?? "";
+          splitRestored = s.split && idSet.has(s.split) ? s.split : null;
+        }
+      } catch {
+        /* 无效会话数据则忽略 */
+      }
+      setOpenIds(openRestored);
+      setActiveId(activeRestored);
+      setSplitId(splitRestored);
+      const toLoad = [...new Set([...openRestored, ...(splitRestored ? [splitRestored] : [])])];
+      if (toLoad.length > 0) {
+        window.setTimeout(() => {
+          for (const id of toLoad) loadGhFileRef.current(id);
+        }, 0);
+      }
       setExtraFolders([]);
-      setDirty(new Set());
+      const drafts = (await loadDrafts(repo)).filter((d) => ghMeta.current.has(`gh:${d.path}`));
+      for (const d of drafts) setCachedDoc(`gh:${d.path}`, d.content);
+      setDirty(new Set(drafts.map((d) => `gh:${d.path}`)));
+      if (drafts.length > 0) {
+        appendConsole([{ kind: "info", text: `已恢复 ${drafts.length} 个未提交的本地草稿（内容保留在编辑器中，提交后清除）` }]);
+      }
       setGhImages((m) => {
         for (const url of m.values()) URL.revokeObjectURL(url);
         return new Map();
@@ -546,6 +609,14 @@ export default function App() {
     () => openGithubRepo(ghRepoInput, ghTokenInput, ghBranchInput),
     [openGithubRepo, ghRepoInput, ghTokenInput, ghBranchInput]
   );
+
+  useEffect(() => {
+    if (!ghTree) return;
+    localStorage.setItem(
+      `lumen.session.${repoKey(ghTree.ref)}`,
+      JSON.stringify({ open: openIds, active: activeId, split: splitId })
+    );
+  }, [ghTree, openIds, activeId, splitId]);
 
   const restoredRepo = useRef(false);
   useEffect(() => {

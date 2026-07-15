@@ -24,6 +24,7 @@ import {
 const DB_NAME = "lumen-sync";
 const META_STORE = "meta";
 const TX_STORE = "transactions";
+const DRAFT_STORE = "drafts";
 
 export function repoKey(ref: GhRepoRef): string {
   return `${ref.owner}/${ref.repo}@${ref.branch}`;
@@ -53,10 +54,12 @@ function openDb(): Promise<IDBDatabase | null> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve) => {
     try {
-      const req = indexedDB.open(DB_NAME, 1);
+      const req = indexedDB.open(DB_NAME, 2);
       req.onupgradeneeded = () => {
-        req.result.createObjectStore(META_STORE);
-        req.result.createObjectStore(TX_STORE);
+        const db = req.result;
+        if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE);
+        if (!db.objectStoreNames.contains(TX_STORE)) db.createObjectStore(TX_STORE);
+        if (!db.objectStoreNames.contains(DRAFT_STORE)) db.createObjectStore(DRAFT_STORE);
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => resolve(null);
@@ -131,6 +134,31 @@ function idbGetAll<T>(store: string): Promise<T[]> {
         }
       })
   );
+}
+
+/** 未提交的编辑草稿：输入即持久化，刷新/断电不丢。 */
+export interface Draft {
+  key: string;
+  repoKey: string;
+  path: string;
+  content: string;
+  savedAt: number;
+}
+
+export function draftKey(repo: string, path: string): string {
+  return `${repo}:${path}`;
+}
+
+export function saveDraft(draft: Draft): Promise<void> {
+  return idbPut(DRAFT_STORE, draft.key, draft);
+}
+
+export function deleteDraft(key: string): Promise<void> {
+  return idbDelete(DRAFT_STORE, key);
+}
+
+export function loadDrafts(repo: string): Promise<Draft[]> {
+  return idbGetAll<Draft>(DRAFT_STORE).then((all) => all.filter((d) => d.repoKey === repo));
 }
 
 /** 本地引导：从 IndexedDB 读取仓库树快照，秒开无网络。 */
