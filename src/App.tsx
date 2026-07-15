@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Editor, getCachedDoc, setCachedDoc, type CursorInfo } from "./Editor";
+import { Editor, getCachedDoc, setCachedDoc, revealLine, type CursorInfo } from "./Editor";
 import { HyperEditor, HYPER_COUNT } from "./HyperEditor";
 import { SAMPLE_FILES, type SampleFile } from "./samples";
 import { languageFor } from "./editor/languages";
@@ -66,6 +66,16 @@ interface CtxMenu {
   items: CtxItem[];
 }
 
+interface SearchHit {
+  fileId: string;
+  name: string;
+  dir?: string;
+  line: number;
+  text: string;
+  start: number;
+  end: number;
+}
+
 interface DirNode {
   name: string;
   path: string;
@@ -114,7 +124,8 @@ export default function App() {
   const [menu, setMenu] = useState<CtxMenu | null>(null);
   const [autoSave, setAutoSave] = useState(true);
   const [consoleOpen, setConsoleOpen] = useState(false);
-  const [consoleTab, setConsoleTab] = useState<"problems" | "output" | "debug" | "terminal" | "ports">("terminal");
+  const [consoleTab, setConsoleTab] = useState<"problems" | "output" | "logs" | "terminal" | "ports">("terminal");
+  const [logLines, setLogLines] = useState<ConsoleLine[]>([]);
   const [consoleHeight, setConsoleHeight] = useState(260);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = Number(localStorage.getItem("lumen.sidebar.width"));
@@ -148,7 +159,7 @@ export default function App() {
   const ghMeta = useRef(new Map<string, { path: string; sha: string; baseContent: string; loaded: boolean }>());
   const [ghLoadingId, setGhLoadingId] = useState<string | null>(null);
   const ghInflight = useRef(new Set<string>());
-  const [, setGhLoadedTick] = useState(0);
+  const [ghLoadedTick, setGhLoadedTick] = useState(0);
   const [commitError, setCommitError] = useState("");
   const [mdPreviewIds, setMdPreviewIds] = useState<Set<string>>(new Set());
   const preloader = useRef<Preloader | null>(null);
@@ -385,11 +396,61 @@ export default function App() {
   const appendConsole = useCallback((lines: ConsoleLine[]) => {
     setConsoleLines((prev) => [...prev, ...lines]);
   }, []);
+
+  const appendLog = useCallback((lines: ConsoleLine[]) => {
+    setLogLines((prev) => [...prev, ...lines]);
+  }, []);
  
   useEffect(() => {
     consoleEndRef.current?.scrollIntoView({ block: "end" });
   }, [consoleLines, consoleOpen]);
  
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchCase, setSearchCase] = useState(false);
+  const [searchRegex, setSearchRegex] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const searchResults = useMemo(() => {
+    if (!searchQuery) return null;
+    void ghLoadedTick;
+    let re: RegExp;
+    try {
+      const src = searchRegex ? searchQuery : searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      re = new RegExp(src, searchCase ? "g" : "gi");
+    } catch {
+      return { hits: [] as SearchHit[], unloaded: 0, invalid: true, truncated: false };
+    }
+    const hits: SearchHit[] = [];
+    let unloaded = 0;
+    for (const f of files) {
+      if (f.hyper || IMAGE_EXTS.has(fileExt(f.name))) continue;
+      const meta = ghMeta.current.get(f.id);
+      const content = getCachedDoc(f.id, meta ? meta.baseContent : f.content);
+      if (meta && !meta.loaded && !content) {
+        unloaded++;
+        continue;
+      }
+      if (!content) continue;
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        re.lastIndex = 0;
+        const m = re.exec(lines[i]);
+        if (!m) continue;
+        hits.push({
+          fileId: f.id,
+          name: f.name,
+          dir: f.dir,
+          line: i + 1,
+          text: lines[i],
+          start: m.index,
+          end: m.index + Math.max(m[0].length, 1),
+        });
+        if (hits.length >= 300) return { hits, unloaded, invalid: false, truncated: true };
+      }
+    }
+    return { hits, unloaded, invalid: false, truncated: false };
+  }, [searchQuery, searchCase, searchRegex, files, ghLoadedTick]);
+
   const termHistory = useRef<Array<{ label: string; fileId: string }>>([]);
   const [termInput, setTermInput] = useState("");
   const termHistIdx = useRef(-1);
@@ -464,23 +525,24 @@ export default function App() {
             next.delete(id);
             return next;
           });
-          appendConsole([{ kind: "info", text: `GitHub：${tx.path} ${r.message}` }]);
+          appendLog([{ kind: "info", text: `GitHub：${tx.path} ${r.message}` }]);
         },
         onTransactionError: (tx, err, willRetry) => {
           if (willRetry) {
-            appendConsole([{ kind: "info", text: `同步引擎：${tx.path} 提交暂时失败（${err.message}），事务已保留，恢复后自动重试` }]);
+            appendLog([{ kind: "info", text: `同步引擎：${tx.path} 提交暂时失败（${err.message}），事务已保留，恢复后自动重试` }]);
           } else {
             setConsoleOpen(true);
-            appendConsole([{ kind: "err", text: `GitHub：${tx.path} 提交失败 — ${err.message}` }]);
+            setConsoleTab("logs");
+            appendLog([{ kind: "err", text: `GitHub：${tx.path} 提交失败 — ${err.message}` }]);
           }
         },
         onState: (state, pending) => setSyncStatus({ state, pending }),
-        onInfo: (text) => appendConsole([{ kind: "info", text }]),
+        onInfo: (text) => appendLog([{ kind: "info", text }]),
       });
       engine.current = e;
       void e.start();
     },
-    [appendConsole]
+    [appendLog]
   );
 
   /** 将一棵仓库树应用到编辑器（全量/本地引导共用），并启动同步引擎。 */
@@ -531,7 +593,7 @@ export default function App() {
       for (const d of drafts) setCachedDoc(`gh:${d.path}`, d.content);
       setDirty(new Set(drafts.map((d) => `gh:${d.path}`)));
       if (drafts.length > 0) {
-        appendConsole([{ kind: "info", text: `已恢复 ${drafts.length} 个未提交的本地草稿（内容保留在编辑器中，提交后清除）` }]);
+        appendLog([{ kind: "info", text: `已恢复 ${drafts.length} 个未提交的本地草稿（内容保留在编辑器中，提交后清除）` }]);
       }
       setGhImages((m) => {
         for (const url of m.values()) URL.revokeObjectURL(url);
@@ -539,7 +601,7 @@ export default function App() {
       });
       setCollapsed(new Set(fs.flatMap((f) => (f.dir ? ancestorDirs(f.dir) : []))));
       setGhOpen(false);
-      appendConsole([{ kind: "info", text: `GitHub：已打开 ${tree.ref.owner}/${tree.ref.repo}@${tree.ref.branch}（${fs.length} 个文件）` }]);
+      appendLog([{ kind: "info", text: `GitHub：已打开 ${tree.ref.owner}/${tree.ref.repo}@${tree.ref.branch}（${fs.length} 个文件）` }]);
 
       startEngine(tree);
       void saveSnapshot({ key: repoKey(tree.ref), headSha: tree.headSha, entries: tree.entries, updatedAt: Date.now() });
@@ -580,7 +642,7 @@ export default function App() {
       preloader.current = p;
       p.start(remaining.slice(0, token ? 1000 : 40));
     },
-    [appendConsole, startEngine]
+    [appendLog, startEngine]
   );
 
   const openGithubRepo = useCallback(async (repoInput: string, tokenInput: string, branchInput: string): Promise<boolean> => {
@@ -648,7 +710,7 @@ export default function App() {
               entries: snap.entries,
               headSha: snap.headSha,
             });
-            appendConsole([{ kind: "info", text: "同步引擎：本地引导完成，正在后台增量同步…" }]);
+            appendLog([{ kind: "info", text: "同步引擎：本地引导完成，正在后台增量同步…" }]);
             setGhRestoring(false);
             void engine.current?.pollOnce();
             return;
@@ -663,7 +725,7 @@ export default function App() {
       }
       setGhRestoring(false);
     })();
-  }, [openGithubRepo, applyTree, appendConsole]);
+  }, [openGithubRepo, applyTree, appendLog]);
 
   const closeGithub = useCallback(() => {
     preloader.current?.stop();
@@ -711,11 +773,11 @@ export default function App() {
     });
     setConsoleOpen(true);
     if (!navigator.onLine) {
-      appendConsole([{ kind: "info", text: `同步引擎：${meta.path} 已入队（当前离线，联网后自动提交）` }]);
+      appendLog([{ kind: "info", text: `同步引擎：${meta.path} 已入队（当前离线，联网后自动提交）` }]);
     }
     setCommitBusy(false);
     setCommitFor(null);
-  }, [commitFor, ghTree, files, commitMsg, appendConsole]);
+  }, [commitFor, ghTree, files, commitMsg, appendLog]);
 
   /** 应用远端 delta packets：文件树、元数据、打开中的文件实时热更新。 */
   handleDeltasRef.current = (deltas, newHead) => {
@@ -798,7 +860,7 @@ export default function App() {
     const entries = [...ghMeta.current.values()].map((m) => ({ path: m.path, sha: m.sha, size: 0 }));
     setGhTree((t) => (t ? { ...t, headSha: newHead, entries } : t));
     void saveSnapshot({ key: repoKey(tree.ref), headSha: newHead, entries, updatedAt: Date.now() });
-    if (notes.length > 0) appendConsole(notes.slice(0, 12).map((text) => ({ kind: "info" as const, text: `同步：${text}` })));
+    if (notes.length > 0) appendLog(notes.slice(0, 12).map((text) => ({ kind: "info" as const, text: `同步：${text}` })));
   };
 
   const switchBranch = useCallback(
@@ -806,13 +868,13 @@ export default function App() {
       setBranchMenuOpen(false);
       if (!ghTree || name === ghTree.ref.branch || branchBusy) return;
       setBranchBusy(true);
-      appendConsole([{ kind: "info", text: `GitHub：正在切换到分支 ${name}…` }]);
+      appendLog([{ kind: "info", text: `GitHub：正在切换到分支 ${name}…` }]);
       const ok = await openGithubRepo(`${ghTree.ref.owner}/${ghTree.ref.repo}`, ghTree.ref.token ?? "", name);
       if (ok) setGhBranchInput(name);
-      else appendConsole([{ kind: "err", text: `GitHub：切换分支 ${name} 失败` }]);
+      else appendLog([{ kind: "err", text: `GitHub：切换分支 ${name} 失败` }]);
       setBranchBusy(false);
     },
-    [ghTree, branchBusy, openGithubRepo, appendConsole]
+    [ghTree, branchBusy, openGithubRepo, appendLog]
   );
 
   const toggleSplit = useCallback(() => {
@@ -959,6 +1021,10 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         saveActiveRef.current();
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setSidebarOpen(true);
+        window.setTimeout(() => searchInputRef.current?.focus(), 30);
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         setSidebarOpen((o) => !o);
@@ -1241,6 +1307,82 @@ export default function App() {
       <div className="workbench">
         {sidebarOpen && (<>
         <aside className="sidebar" style={{ width: sidebarWidth }}>
+          <div className="search-box">
+            <input
+              ref={searchInputRef}
+              className="search-field"
+              placeholder="全文搜索…"
+              value={searchQuery}
+              spellCheck={false}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setSearchQuery("");
+              }}
+            />
+            <button
+              className={`search-opt${searchCase ? " on" : ""}`}
+              title="区分大小写"
+              onClick={() => setSearchCase((v) => !v)}
+            >
+              Aa
+            </button>
+            <button
+              className={`search-opt${searchRegex ? " on" : ""}`}
+              title="正则表达式"
+              onClick={() => setSearchRegex((v) => !v)}
+            >
+              .*
+            </button>
+          </div>
+          {searchResults ? (
+            <div className="search-results">
+              {searchResults.invalid ? (
+                <div className="search-note">无效的正则表达式</div>
+              ) : searchResults.hits.length === 0 ? (
+                <div className="search-note">未找到结果</div>
+              ) : (
+                (() => {
+                  const groups = new Map<string, SearchHit[]>();
+                  for (const h of searchResults.hits) {
+                    const g = groups.get(h.fileId);
+                    if (g) g.push(h);
+                    else groups.set(h.fileId, [h]);
+                  }
+                  return [...groups.entries()].map(([fid, hs]) => (
+                    <div key={fid} className="search-group">
+                      <div className="search-file">
+                        <img className="ficon" src={languageFor(hs[0].name).icon} alt="" />
+                        <span className="search-fname">{hs[0].name}</span>
+                        {hs[0].dir && <span className="search-fdir">{hs[0].dir}</span>}
+                        <span className="search-count">{hs.length}</span>
+                      </div>
+                      {hs.map((h, i) => (
+                        <button
+                          key={`${h.line}-${i}`}
+                          className="search-hit"
+                          title={`第 ${h.line} 行`}
+                          onClick={() => {
+                            openFileSmart(h.fileId);
+                            revealLine(h.fileId, h.line, h.start);
+                          }}
+                        >
+                          <span className="search-hit-text">
+                            {h.text.slice(Math.max(0, h.start - 24), h.start)}
+                            <mark>{h.text.slice(h.start, h.end)}</mark>
+                            {h.text.slice(h.end, h.end + 80)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ));
+                })()
+              )}
+              {searchResults.truncated && <div className="search-note">结果过多，仅显示前 300 条</div>}
+              {searchResults.unloaded > 0 && (
+                <div className="search-note">{searchResults.unloaded} 个文件尚未加载，未参与搜索（后台预加载中，稍后重搜即可）</div>
+              )}
+            </div>
+          ) : (
           <div className="explorer-section">
             <div className="explorer-head" onClick={() => setTreeOpen((o) => !o)}>
               <span className={`twist${treeOpen ? " open" : ""}`} />
@@ -1309,6 +1451,7 @@ export default function App() {
               </nav>
             )}
           </div>
+          )}
         </aside>
         <div
           className="sidebar-resizer"
@@ -1671,7 +1814,7 @@ export default function App() {
                 {([
                   ["problems", "问题"],
                   ["output", "输出"],
-                  ["debug", "调试控制台"],
+                  ["logs", "日志"],
                   ["terminal", "终端"],
                   ["ports", "端口"],
                 ] as const).map(([id, label]) => (
@@ -1687,7 +1830,7 @@ export default function App() {
                   <button className="icon-btn sm" title="新建终端" onClick={() => setConsoleTab("terminal")}>
                     <span className="cicon" style={{ "--icon": `url("${addIcon}")` } as React.CSSProperties} />
                   </button>
-                  <button className="icon-btn sm" title="清空终端" onClick={() => setConsoleLines([])}>
+                  <button className="icon-btn sm" title="清空" onClick={() => (consoleTab === "logs" ? setLogLines([]) : setConsoleLines([]))}>
                     <span className="cicon" style={{ "--icon": `url("${trashIcon}")` } as React.CSSProperties} />
                   </button>
                   <button className="icon-btn sm" title="更多操作">
@@ -1712,8 +1855,17 @@ export default function App() {
                     <div className="console-empty">目前尚未在工作区检测到问题。</div>
                   ) : consoleTab === "output" ? (
                     <div className="console-empty">没有要显示的输出。</div>
-                  ) : consoleTab === "debug" ? (
-                    <div className="console-empty">尚未启动调试会话。</div>
+                  ) : consoleTab === "logs" ? (
+                    logLines.length === 0 ? (
+                      <div className="console-empty">暂无日志。</div>
+                    ) : (
+                      <>
+                        {logLines.map((l, i) => (
+                          <pre key={i} className={`console-line ${l.kind}`}>{l.text}</pre>
+                        ))}
+                        <div ref={consoleEndRef} />
+                      </>
+                    )
                   ) : consoleTab === "ports" ? (
                     <div className="console-empty">尚未转发任何端口。</div>
                   ) : (

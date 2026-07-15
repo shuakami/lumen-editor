@@ -34,6 +34,25 @@ export function getCachedDoc(fileId: string, fallback: string): string {
 export function setCachedDoc(fileId: string, doc: string): void {
   docCache.set(fileId, doc);
 }
+
+const viewRegistry = new Map<string, EditorView>();
+
+/** 跳转到指定文件的某一行（编辑器未挂载时自动重试）。 */
+export function revealLine(fileId: string, line: number, col = 0, attempts = 20): void {
+  const view = viewRegistry.get(fileId);
+  if (!view) {
+    if (attempts > 0) window.setTimeout(() => revealLine(fileId, line, col, attempts - 1), 60);
+    return;
+  }
+  const doc = view.state.doc;
+  const ln = doc.line(Math.min(Math.max(1, line), doc.lines));
+  const pos = Math.min(ln.from + Math.max(0, col), ln.to);
+  view.dispatch({
+    selection: { anchor: pos },
+    effects: EditorView.scrollIntoView(pos, { y: "center" }),
+  });
+  view.focus();
+}
  
 export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCursor }: EditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -79,6 +98,7 @@ export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCurs
       }),
     });
     viewRef.current = view;
+    viewRegistry.set(fileId, view);
     view.focus();
     const line = view.state.doc.lineAt(view.state.selection.main.head);
     callbacks.current.onCursor({
@@ -89,6 +109,7 @@ export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCurs
     });
     return () => {
       view.destroy();
+      if (viewRegistry.get(fileId) === view) viewRegistry.delete(fileId);
       viewRef.current = null;
     };
   }, [fileId, filename, initialDoc]);

@@ -321,6 +321,53 @@ html[data-theme="dark"] .console-line.err { color: #f48771; }
   display: inline-block; width: 8px; height: calc(var(--code-size, 13px) + 2px);
   vertical-align: text-bottom; background: var(--fg-2);
 }
+.search-box {
+  display: flex; align-items: center; gap: 3px;
+  padding: 7px 8px 5px;
+}
+.search-field {
+  flex: 1; min-width: 0;
+  background: var(--bg-2, transparent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 4px 7px;
+  outline: none;
+}
+.search-field:focus { border-color: #3794ff; }
+.search-opt {
+  flex: none;
+  background: transparent; border: 1px solid transparent; border-radius: 3px;
+  color: var(--fg-3); font-size: 11px; font-family: inherit;
+  padding: 3px 4px; cursor: pointer;
+}
+.search-opt:hover { color: var(--fg); }
+.search-opt.on { color: #3794ff; border-color: #3794ff; background: rgba(55, 148, 255, 0.08); }
+.search-results { overflow-y: auto; flex: 1; padding: 2px 0 10px; }
+.search-note { color: var(--fg-3); font-size: 12px; padding: 6px 12px; }
+.search-group { margin-bottom: 2px; }
+.search-file {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 10px; font-size: 12px; color: var(--fg);
+}
+.search-file .ficon { width: 14px; height: 14px; }
+.search-fname { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-fdir { color: var(--fg-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-count {
+  margin-left: auto; flex: none;
+  background: var(--border); color: var(--fg-2);
+  border-radius: 8px; font-size: 10px; padding: 0 6px; line-height: 15px;
+}
+.search-hit {
+  display: block; width: 100%; text-align: left;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--fg-2); font-size: 12px; font-family: inherit;
+  padding: 2px 10px 2px 29px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.search-hit:hover { background: var(--hover, rgba(128, 128, 128, 0.12)); }
+.search-hit mark { background: rgba(234, 179, 8, 0.35); color: inherit; border-radius: 2px; }
 .tree { overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 1px; }
 .tree::-webkit-scrollbar { width: 8px; }
 .tree::-webkit-scrollbar-track { background: transparent; }
