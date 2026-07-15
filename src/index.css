@@ -101,6 +101,12 @@ button { font-family: inherit; }
 /* ---------- body ---------- */
 .workbench { flex: 1; display: flex; min-height: 0; }
  
+.sidebar-resizer {
+  width: 4px; flex: none; cursor: col-resize;
+  margin-left: -2px;
+}
+.sidebar-resizer:hover { background: rgba(128, 128, 128, 0.25); }
+
 .sidebar {
   width: 216px; flex: none;
   display: flex; flex-direction: column;

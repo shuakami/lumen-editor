@@ -174,16 +174,6 @@ function simpleLint(view: EditorView): Diagnostic[] {
   const doc = view.state.doc;
   if (doc.length > 200_000) return diagnostics;
   const text = doc.toString();
-  const todoRe = /\/\/\s*(TODO|FIXME|HACK)\b[^\n]*/g;
-  for (const m of text.matchAll(todoRe)) {
-    diagnostics.push({
-      from: m.index,
-      to: m.index + m[0].length,
-      severity: "warning",
-      message: `Unresolved ${m[1]} comment`,
-      source: "lumen",
-    });
-  }
   const emptyCatch = /catch\s*(\([^)]*\))?\s*\{\s*\}/g;
   for (const m of text.matchAll(emptyCatch)) {
     diagnostics.push({
@@ -259,22 +249,8 @@ const cCompletion = autocompletion({
   override: [(ctx) => cStaticSource(ctx), documentWords],
 });
  
-function cLint(view: EditorView): Diagnostic[] {
-  const diagnostics: Diagnostic[] = [];
-  const doc = view.state.doc;
-  if (doc.length > 200_000) return diagnostics;
-  const text = doc.toString();
-  const todoRe = /\/\/\s*(TODO|FIXME|HACK)\b[^\n]*|\/\*\s*(TODO|FIXME|HACK)\b[^*]*/g;
-  for (const m of text.matchAll(todoRe)) {
-    diagnostics.push({
-      from: m.index,
-      to: m.index + m[0].length,
-      severity: "warning",
-      message: `Unresolved ${m[1] ?? m[2]} comment`,
-      source: "lumen",
-    });
-  }
-  return diagnostics;
+function cLint(): Diagnostic[] {
+  return [];
 }
  
 export const cLinter = linter(cLint, { delay: 400 });

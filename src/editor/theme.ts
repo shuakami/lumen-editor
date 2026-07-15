@@ -53,6 +53,9 @@ function chrome(colors: {
         outline: `1px solid ${colors.matchBracketLine}`,
         borderRadius: "2px",
       },
+      "&.cm-focused .cm-nonmatchingBracket, .cm-nonmatchingBracket": {
+        backgroundColor: "transparent",
+      },
       ".cm-selectionMatch": { backgroundColor: colors.selMatch, borderRadius: "2px" },
       ".cm-searchMatch": { backgroundColor: colors.searchMatch, borderRadius: "2px" },
       ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: colors.searchMatchSel },
@@ -66,6 +69,7 @@ function chrome(colors: {
       },
       ".cm-lintRange-error": { textDecoration: "underline wavy #cf2d56" },
       ".cm-lintRange-warning": { textDecoration: "underline wavy #db704b" },
+      ".cm-lintRange-active": { backgroundColor: "transparent" },
     },
     { dark: colors.dark }
   );

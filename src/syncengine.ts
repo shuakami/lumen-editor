@@ -172,7 +172,7 @@ export class SyncEngine {
     private ref: GhRepoRef,
     headSha: string,
     private events: SyncEvents,
-    private intervalMs = 20000
+    private intervalMs = 5000
   ) {
     this.headSha = headSha;
     window.addEventListener("online", this.onlineHandler);

@@ -116,6 +116,11 @@ export default function App() {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleTab, setConsoleTab] = useState<"problems" | "output" | "debug" | "terminal" | "ports">("terminal");
   const [consoleHeight, setConsoleHeight] = useState(260);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = Number(localStorage.getItem("lumen.sidebar.width"));
+    return saved >= 140 && saved <= 600 ? saved : 216;
+  });
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([]);
   const [running, setRunning] = useState(false);
   const [splitId, setSplitId] = useState<string | null>(null);
@@ -317,9 +322,36 @@ export default function App() {
     });
   }, []);
  
+  const autoPushTimers = useRef(new Map<string, number>());
+
   const onDocChange = useCallback((fileId: string) => {
-    if (autoSaveRef.current) return;
-    setDirty((d) => (d.has(fileId) ? d : new Set(d).add(fileId)));
+    if (!autoSaveRef.current) {
+      setDirty((d) => (d.has(fileId) ? d : new Set(d).add(fileId)));
+      return;
+    }
+    const meta = ghMeta.current.get(fileId);
+    if (!meta || !meta.loaded || !engine.current) return;
+    const timers = autoPushTimers.current;
+    const prev = timers.get(fileId);
+    if (prev !== undefined) window.clearTimeout(prev);
+    timers.set(
+      fileId,
+      window.setTimeout(() => {
+        timers.delete(fileId);
+        const m = ghMeta.current.get(fileId);
+        const e = engine.current;
+        if (!m || !m.loaded || !e) return;
+        const content = getCachedDoc(fileId, m.baseContent);
+        if (content === m.baseContent) return;
+        void e.enqueue({
+          path: m.path,
+          baseSha: m.sha,
+          baseContent: m.baseContent,
+          content,
+          message: `Update ${m.path}`,
+        });
+      }, 2500)
+    );
   }, []);
  
   const appendConsole = useCallback((lines: ConsoleLine[]) => {
@@ -330,8 +362,7 @@ export default function App() {
     consoleEndRef.current?.scrollIntoView({ block: "end" });
   }, [consoleLines, consoleOpen]);
  
-  const runActive = useCallback(async () => {
-    const f = files.find((x) => x.id === activeId && openIds.includes(x.id));
+  const runFile = useCallback(async (f: (typeof files)[number] | undefined) => {
     if (!f) return;
     setConsoleOpen(true);
     if (f.hyper) {
@@ -364,7 +395,11 @@ export default function App() {
     } finally {
       setRunning(false);
     }
-  }, [files, activeId, openIds, appendConsole]);
+  }, [appendConsole]);
+ 
+  const runActive = useCallback(() => {
+    void runFile(files.find((x) => x.id === activeId && openIds.includes(x.id)));
+  }, [runFile, files, activeId, openIds]);
  
   const saveFile = useCallback((id?: string) => {
     setDirty((d) => {
@@ -846,6 +881,9 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         saveActiveRef.current();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setSidebarOpen((o) => !o);
       } else if (e.key === "Escape") {
         setPaletteOpen(false);
         setMenu(null);
@@ -943,6 +981,7 @@ export default function App() {
         { label: "命令面板…", hint: "Ctrl+K", run: () => setPaletteOpen(true) },
         { label: dark ? "浅色主题" : "深色主题", run: () => setDark((d) => !d) },
         { sep: true },
+        { label: "侧边栏", hint: "Ctrl+B", checked: sidebarOpen, run: () => setSidebarOpen((o) => !o) },
         { label: "拆分编辑器", checked: !!splitId, run: toggleSplit },
         { sep: true },
         { label: "控制台面板", checked: consoleOpen, run: () => setConsoleOpen((o) => !o) },
@@ -1122,7 +1161,8 @@ export default function App() {
         </div>
       </header>
       <div className="workbench">
-        <aside className="sidebar">
+        {sidebarOpen && (<>
+        <aside className="sidebar" style={{ width: sidebarWidth }}>
           <div className="explorer-section">
             <div className="explorer-head" onClick={() => setTreeOpen((o) => !o)}>
               <span className={`twist${treeOpen ? " open" : ""}`} />
@@ -1135,7 +1175,7 @@ export default function App() {
                 <button className="mini-btn" title="新建文件夹" onClick={newFolder}>
                   <span className="cicon" style={{ "--icon": `url("${newFolderIcon}")` } as React.CSSProperties} />
                 </button>
-                <button className="mini-btn" title="刷新资源管理器" onClick={() => setFiles((fs) => [...fs])}>
+                <button className="mini-btn" title="刷新资源管理器" onClick={() => { setFiles((fs) => [...fs]); void engine.current?.pollOnce(); }}>
                   <span className="cicon" style={{ "--icon": `url("${refreshIcon}")` } as React.CSSProperties} />
                 </button>
                 <button className="mini-btn" title="全部折叠" onClick={collapseAll}>
@@ -1192,6 +1232,26 @@ export default function App() {
             )}
           </div>
         </aside>
+        <div
+          className="sidebar-resizer"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const startX = e.clientX;
+            const startW = sidebarWidth;
+            const onMove = (ev: MouseEvent) => {
+              const w = Math.min(Math.max(startW + (ev.clientX - startX), 140), 600);
+              setSidebarWidth(w);
+              localStorage.setItem("lumen.sidebar.width", String(w));
+            };
+            const onUp = () => {
+              window.removeEventListener("mousemove", onMove);
+              window.removeEventListener("mouseup", onUp);
+            };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          }}
+        />
+        </>)}
         <main className="main">
           <div className="editor-area">
           <div className="editor-col" style={splitId ? { flex: `${splitRatio} 1 0` } : undefined}>
@@ -1470,6 +1530,16 @@ export default function App() {
                       </span>
                     </div>
                   )}
+                  <div className="tab-actions">
+                    <button
+                      className="icon-btn run-btn"
+                      title={running ? "运行中…" : "运行此文件"}
+                      disabled={running}
+                      onClick={() => void runFile(sf)}
+                    >
+                      <span className="cicon" style={{ "--icon": `url("${playIcon}")` } as React.CSSProperties} />
+                    </button>
+                  </div>
                 </div>
                 {!sf ? (
                   <div className="empty-pane" />
