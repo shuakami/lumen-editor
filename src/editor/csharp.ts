@@ -116,6 +116,27 @@ const staticSource = completeFromList(STATIC_COMPLETIONS);
 const WORD_RE = /[A-Za-z_][A-Za-z0-9_]*/g;
 const STATIC_LABELS = new Set(STATIC_COMPLETIONS.map((c) => c.label));
  
+/** 光标处于注释或字符串内时不弹补全。 */
+function inCommentOrString(ctx: CompletionContext): boolean {
+  const line = ctx.state.doc.lineAt(ctx.pos);
+  const before = line.text.slice(0, ctx.pos - line.from);
+  let quote = "";
+  for (let i = 0; i < before.length; i++) {
+    const c = before[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "/" && before[i + 1] === "/") {
+      return true;
+    }
+  }
+  if (quote) return true;
+  const upto = ctx.state.sliceDoc(Math.max(0, ctx.pos - 20000), ctx.pos);
+  return upto.lastIndexOf("/*") > upto.lastIndexOf("*/");
+}
+
 function documentWords(context: CompletionContext): CompletionResult | null {
   const word = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*$/);
   if (!word || (!context.explicit && word.text.length < 2)) return null;
@@ -137,8 +158,8 @@ export const csharpCompletion = autocompletion({
   activateOnTyping: true,
   maxRenderedOptions: 60,
   override: [
-    (ctx) => staticSource(ctx),
-    documentWords,
+    (ctx) => (inCommentOrString(ctx) ? null : staticSource(ctx)),
+    (ctx) => (inCommentOrString(ctx) ? null : documentWords(ctx)),
   ],
 });
  
@@ -246,7 +267,10 @@ const cStaticSource = completeFromList([
 const cCompletion = autocompletion({
   activateOnTyping: true,
   maxRenderedOptions: 60,
-  override: [(ctx) => cStaticSource(ctx), documentWords],
+  override: [
+    (ctx) => (inCommentOrString(ctx) ? null : cStaticSource(ctx)),
+    (ctx) => (inCommentOrString(ctx) ? null : documentWords(ctx)),
+  ],
 });
  
 function cLint(): Diagnostic[] {
