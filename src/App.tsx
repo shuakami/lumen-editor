@@ -390,6 +390,10 @@ export default function App() {
     consoleEndRef.current?.scrollIntoView({ block: "end" });
   }, [consoleLines, consoleOpen]);
  
+  const termHistory = useRef<Array<{ label: string; fileId: string }>>([]);
+  const [termInput, setTermInput] = useState("");
+  const termHistIdx = useRef(-1);
+
   const runFile = useCallback(async (f: (typeof files)[number] | undefined) => {
     if (!f) return;
     setConsoleOpen(true);
@@ -404,7 +408,9 @@ export default function App() {
     }
     setRunning(true);
     setConsoleTab("terminal");
-    appendConsole([{ kind: "cmd", text: runCommandLabel(lang.id, `${f.dir ? `${f.dir}/` : ""}${f.name}`) }]);
+    const cmdLabel = runCommandLabel(lang.id, `${f.dir ? `${f.dir}/` : ""}${f.name}`);
+    termHistory.current = [...termHistory.current.filter((h) => h.label !== cmdLabel), { label: cmdLabel, fileId: f.id }];
+    appendConsole([{ kind: "cmd", text: cmdLabel }]);
     try {
       const r = await runCode(lang.id, getCachedDoc(f.id, f.content));
       const out: ConsoleLine[] = [];
@@ -1736,8 +1742,53 @@ export default function App() {
                         </pre>
                       )}
                       {!running && (
-                        <pre className="console-line cmd">
-                          <span className="console-prompt">wandbox:~$</span> <span className="console-block-caret" />
+                        <pre className="console-line cmd console-input-line">
+                          <span className="console-prompt">wandbox:~$</span>{" "}
+                          <input
+                            className="console-input"
+                            value={termInput}
+                            spellCheck={false}
+                            onChange={(e) => {
+                              setTermInput(e.target.value);
+                              termHistIdx.current = -1;
+                            }}
+                            onKeyDown={(e) => {
+                              const hist = termHistory.current;
+                              if (e.key === "ArrowUp") {
+                                e.preventDefault();
+                                if (hist.length === 0) return;
+                                const idx = termHistIdx.current < 0 ? hist.length - 1 : Math.max(0, termHistIdx.current - 1);
+                                termHistIdx.current = idx;
+                                setTermInput(hist[idx].label);
+                              } else if (e.key === "ArrowDown") {
+                                e.preventDefault();
+                                if (termHistIdx.current < 0) return;
+                                const idx = termHistIdx.current + 1;
+                                if (idx >= hist.length) {
+                                  termHistIdx.current = -1;
+                                  setTermInput("");
+                                } else {
+                                  termHistIdx.current = idx;
+                                  setTermInput(hist[idx].label);
+                                }
+                              } else if (e.key === "Enter") {
+                                e.preventDefault();
+                                const cmd = termInput.trim();
+                                termHistIdx.current = -1;
+                                setTermInput("");
+                                if (!cmd) return;
+                                const hit = hist.find((h) => h.label === cmd);
+                                if (hit) {
+                                  void runFile(files.find((x) => x.id === hit.fileId));
+                                } else {
+                                  appendConsole([
+                                    { kind: "cmd", text: cmd },
+                                    { kind: "err", text: `命令未找到：${cmd}（按 ↑ 可翻出历史命令）` },
+                                  ]);
+                                }
+                              }
+                            }}
+                          />
                         </pre>
                       )}
                       <div ref={consoleEndRef} />

@@ -310,6 +310,13 @@ html[data-theme="dark"] .console-line.err { color: #f48771; }
 }
 .cmd-dot.ok { background: #3794ff; border-color: #3794ff; }
 .cmd-dot.fail { background: #f14c4c; border-color: #f14c4c; }
+.console-input-line { display: flex; align-items: center; gap: 0; }
+.console-input {
+  flex: 1; min-width: 0; margin-left: 7px;
+  background: transparent; border: none; outline: none;
+  color: inherit; font: inherit; padding: 0;
+  caret-color: var(--fg-2);
+}
 .console-block-caret {
   display: inline-block; width: 8px; height: calc(var(--code-size, 13px) + 2px);
   vertical-align: text-bottom; background: var(--fg-2);
