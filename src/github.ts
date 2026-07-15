@@ -200,6 +200,21 @@ function merge3(base: string, ours: string, theirs: string): { text: string; cle
   return { text: out.join("\n"), clean };
 }
 
+export interface GhCodeHit {
+  path: string;
+  fragment: string;
+}
+
+/** GitHub code search（覆盖尚未加载到本地的文件）。 */
+export async function searchCode(ref: GhRepoRef, q: string): Promise<GhCodeHit[]> {
+  const res = await gh<{ items: Array<{ path: string; text_matches?: Array<{ fragment: string }> }> }>(
+    `/search/code?q=${encodeURIComponent(`${q} repo:${ref.owner}/${ref.repo}`)}&per_page=20`,
+    ref.token,
+    { headers: { Accept: "application/vnd.github.text-match+json" } }
+  );
+  return res.items.map((i) => ({ path: i.path, fragment: i.text_matches?.[0]?.fragment ?? "" }));
+}
+
 /**
  * 提交单个文件。若远端已被他人更新（sha 变化），自动拉取最新内容做三方合并后重试。
  */

@@ -5,7 +5,7 @@ import { SAMPLE_FILES, type SampleFile } from "./samples";
 import { languageFor } from "./editor/languages";
 import { applyCodeScale } from "./editor/scale";
 import { isRunnable, runCode, runCommandLabel } from "./editor/run";
-import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, type GhTree, type GhBranch, type GhFileDelta } from "./github";
+import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, searchCode, type GhTree, type GhBranch, type GhFileDelta, type GhCodeHit } from "./github";
 import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, type SyncState } from "./syncengine";
 import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
 import { Preloader, type PreloadTarget } from "./preload";
@@ -22,6 +22,7 @@ import collapseAllIcon from "./assets/codicons/collapse-all.svg";
 import playIcon from "./assets/codicons/play.svg";
 import splitIcon from "./assets/codicons/split-horizontal.svg";
 import trashIcon from "./assets/codicons/trash.svg";
+import copyIcon from "./assets/codicons/copy.svg";
 import closeIcon from "./assets/codicons/close.svg";
 import checkIcon from "./assets/codicons/check.svg";
 import addIcon from "./assets/codicons/add.svg";
@@ -401,55 +402,101 @@ export default function App() {
     setLogLines((prev) => [...prev, ...lines]);
   }, []);
  
-  useEffect(() => {
-    consoleEndRef.current?.scrollIntoView({ block: "end" });
-  }, [consoleLines, consoleOpen]);
- 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchCase, setSearchCase] = useState(false);
-  const [searchRegex, setSearchRegex] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  const consoleBodyRef = useRef<HTMLDivElement>(null);
+  const consoleScrollPos = useRef(new Map<string, number>());
+  const cursorMap = useRef(new Map<string, { line: number; col: number }>());
+  const sidebarScrollRef = useRef(0);
+  const treeNavRef = useRef<HTMLElement>(null);
 
-  const searchResults = useMemo(() => {
-    if (!searchQuery) return null;
+  useEffect(() => {
+    const el = consoleBodyRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    if (nearBottom) consoleEndRef.current?.scrollIntoView({ block: "end" });
+  }, [consoleLines, logLines]);
+
+  useEffect(() => {
+    const el = consoleBodyRef.current;
+    if (!el) return;
+    const saved = consoleScrollPos.current.get(consoleTab);
+    el.scrollTop = saved ?? el.scrollHeight;
+  }, [consoleTab, consoleOpen]);
+ 
+  const searchHits = useMemo(() => {
+    const q = query.trim();
+    if (q.length < 2) return [];
     void ghLoadedTick;
-    let re: RegExp;
-    try {
-      const src = searchRegex ? searchQuery : searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      re = new RegExp(src, searchCase ? "g" : "gi");
-    } catch {
-      return { hits: [] as SearchHit[], unloaded: 0, invalid: true, truncated: false };
-    }
+    const needle = q.toLowerCase();
     const hits: SearchHit[] = [];
-    let unloaded = 0;
     for (const f of files) {
       if (f.hyper || IMAGE_EXTS.has(fileExt(f.name))) continue;
       const meta = ghMeta.current.get(f.id);
       const content = getCachedDoc(f.id, meta ? meta.baseContent : f.content);
-      if (meta && !meta.loaded && !content) {
-        unloaded++;
-        continue;
-      }
       if (!content) continue;
       const lines = content.split("\n");
       for (let i = 0; i < lines.length; i++) {
-        re.lastIndex = 0;
-        const m = re.exec(lines[i]);
-        if (!m) continue;
+        const idx = lines[i].toLowerCase().indexOf(needle);
+        if (idx < 0) continue;
         hits.push({
           fileId: f.id,
           name: f.name,
           dir: f.dir,
           line: i + 1,
-          text: lines[i],
-          start: m.index,
-          end: m.index + Math.max(m[0].length, 1),
+          text: lines[i].trim().slice(0, 80),
+          start: idx,
+          end: idx + q.length,
         });
-        if (hits.length >= 300) return { hits, unloaded, invalid: false, truncated: true };
+        if (hits.length >= 30) return hits;
       }
     }
-    return { hits, unloaded, invalid: false, truncated: false };
-  }, [searchQuery, searchCase, searchRegex, files, ghLoadedTick]);
+    return hits;
+  }, [query, files, ghLoadedTick]);
+
+  const [ghSearchHits, setGhSearchHits] = useState<GhCodeHit[]>([]);
+  useEffect(() => {
+    setGhSearchHits([]);
+    const q = query.trim();
+    if (!paletteOpen || q.length < 3 || !ghTree) return;
+    const t = window.setTimeout(() => {
+      void searchCode(ghTree.ref, q)
+        .then((hits) => setGhSearchHits(hits))
+        .catch(() => {});
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [query, paletteOpen, ghTree]);
+
+  const [copiedTick, setCopiedTick] = useState(false);
+  const copyAllOutput = useCallback(() => {
+    const src = consoleTab === "logs" ? logLines : consoleLines;
+    if (src.length === 0) return;
+    const text = src.map((l) => (l.kind === "cmd" ? `$ ${l.text}` : l.text)).join("\n");
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopiedTick(true);
+      window.setTimeout(() => setCopiedTick(false), 1200);
+    });
+  }, [consoleTab, logLines, consoleLines]);
+  const copyAllOutputRef = useRef(copyAllOutput);
+  copyAllOutputRef.current = copyAllOutput;
+  const consoleOpenRef = useRef(consoleOpen);
+  consoleOpenRef.current = consoleOpen;
+
+  const revealFirstMatch = useCallback((fileId: string, q: string, attempts = 30) => {
+    const meta = ghMeta.current.get(fileId);
+    const content = getCachedDoc(fileId, meta?.loaded ? meta.baseContent : "");
+    if (!content) {
+      if (attempts > 0) window.setTimeout(() => revealFirstMatch(fileId, q, attempts - 1), 100);
+      return;
+    }
+    const lines = content.split("\n");
+    const needle = q.toLowerCase();
+    for (let i = 0; i < lines.length; i++) {
+      const idx = lines[i].toLowerCase().indexOf(needle);
+      if (idx >= 0) {
+        revealLine(fileId, i + 1, idx);
+        return;
+      }
+    }
+  }, []);
 
   const termHistory = useRef<Array<{ label: string; fileId: string }>>([]);
   const [termInput, setTermInput] = useState("");
@@ -571,10 +618,31 @@ export default function App() {
       try {
         const raw = localStorage.getItem(`lumen.session.${repo}`);
         if (raw) {
-          const s = JSON.parse(raw) as { open?: string[]; active?: string; split?: string | null };
+          const s = JSON.parse(raw) as {
+            open?: string[];
+            active?: string;
+            split?: string | null;
+            cursors?: Record<string, { line: number; col: number }>;
+            consoleOpen?: boolean;
+            consoleHeight?: number;
+            consoleTab?: string;
+            consoleScroll?: Record<string, number>;
+            sidebarScroll?: number;
+          };
           openRestored = (s.open ?? []).filter((x) => idSet.has(x));
           activeRestored = s.active && idSet.has(s.active) ? s.active : openRestored[0] ?? "";
           splitRestored = s.split && idSet.has(s.split) ? s.split : null;
+          if (s.cursors) cursorMap.current = new Map(Object.entries(s.cursors));
+          if (typeof s.consoleHeight === "number") setConsoleHeight(Math.min(Math.max(s.consoleHeight, 120), Math.max(120, window.innerHeight - 160)));
+          if (typeof s.consoleOpen === "boolean") setConsoleOpen(s.consoleOpen);
+          if (s.consoleTab === "problems" || s.consoleTab === "output" || s.consoleTab === "logs" || s.consoleTab === "terminal" || s.consoleTab === "ports") setConsoleTab(s.consoleTab);
+          if (s.consoleScroll) consoleScrollPos.current = new Map(Object.entries(s.consoleScroll));
+          if (typeof s.sidebarScroll === "number") {
+            sidebarScrollRef.current = s.sidebarScroll;
+            window.setTimeout(() => {
+              if (treeNavRef.current) treeNavRef.current.scrollTop = sidebarScrollRef.current;
+            }, 80);
+          }
         }
       } catch {
         /* 无效会话数据则忽略 */
@@ -679,13 +747,42 @@ export default function App() {
     [openGithubRepo, ghRepoInput, ghTokenInput, ghBranchInput]
   );
 
+  const buildSession = useCallback(
+    () => ({
+      open: openIds,
+      active: activeId,
+      split: splitId,
+      cursors: Object.fromEntries(cursorMap.current),
+      consoleOpen,
+      consoleHeight,
+      consoleTab,
+      consoleScroll: Object.fromEntries(consoleScrollPos.current),
+      sidebarScroll: sidebarScrollRef.current,
+    }),
+    [openIds, activeId, splitId, consoleOpen, consoleHeight, consoleTab]
+  );
+  const buildSessionRef = useRef(buildSession);
+  buildSessionRef.current = buildSession;
+
   useEffect(() => {
     if (!ghTree) return;
-    localStorage.setItem(
-      `lumen.session.${repoKey(ghTree.ref)}`,
-      JSON.stringify({ open: openIds, active: activeId, split: splitId })
-    );
-  }, [ghTree, openIds, activeId, splitId]);
+    localStorage.setItem(`lumen.session.${repoKey(ghTree.ref)}`, JSON.stringify(buildSession()));
+  }, [ghTree, buildSession]);
+
+  useEffect(() => {
+    const save = () => {
+      const tree = ghTreeRef.current;
+      if (tree) localStorage.setItem(`lumen.session.${repoKey(tree.ref)}`, JSON.stringify(buildSessionRef.current()));
+    };
+    window.addEventListener("beforeunload", save);
+    return () => window.removeEventListener("beforeunload", save);
+  }, []);
+
+  useEffect(() => {
+    if (!activeId) return;
+    const c = cursorMap.current.get(activeId);
+    if (c) revealLine(activeId, c.line, Math.max(0, c.col - 1));
+  }, [activeId]);
 
   const restoredRepo = useRef(false);
   useEffect(() => {
@@ -1002,11 +1099,42 @@ export default function App() {
     [files, openFileSmart, dark, newFile]
   );
  
+  const searchCommands = useMemo<Command[]>(() => {
+    const q = query.trim();
+    const local = searchHits.map((h) => ({
+      id: `hit-${h.fileId}-${h.line}`,
+      label: `${h.dir ? `${h.dir}/` : ""}${h.name}:${h.line}  ·  ${h.text}`,
+      hint: "全文",
+      fileIcon: languageFor(h.name).icon,
+      run: () => {
+        openFileSmart(h.fileId);
+        revealLine(h.fileId, h.line, h.start);
+      },
+    }));
+    const seen = new Set(searchHits.map((h) => h.fileId));
+    const remote = ghSearchHits
+      .filter((h) => !seen.has(`gh:${h.path}`) && ghMeta.current.has(`gh:${h.path}`))
+      .map((h) => {
+        const frag = h.fragment.split("\n").find((l) => l.toLowerCase().includes(q.toLowerCase()))?.trim() ?? h.fragment.trim();
+        return {
+          id: `ghhit-${h.path}`,
+          label: `${h.path}  ·  ${frag.slice(0, 80)}`,
+          hint: "GitHub",
+          fileIcon: languageFor(h.path).icon,
+          run: () => {
+            openFileSmart(`gh:${h.path}`);
+            revealFirstMatch(`gh:${h.path}`, q);
+          },
+        };
+      });
+    return [...local, ...remote];
+  }, [searchHits, ghSearchHits, query, openFileSmart, revealFirstMatch]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return commands;
-    return commands.filter((c) => c.label.toLowerCase().includes(q));
-  }, [commands, query]);
+    const base = !q ? commands : commands.filter((c) => c.label.toLowerCase().includes(q));
+    return [...base, ...searchCommands];
+  }, [commands, query, searchCommands]);
  
   useEffect(() => setHlIndex(0), [query, paletteOpen]);
  
@@ -1021,10 +1149,12 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         saveActiveRef.current();
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "c" && consoleOpenRef.current) {
+        e.preventDefault();
+        copyAllOutputRef.current();
       } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
-        setSidebarOpen(true);
-        window.setTimeout(() => searchInputRef.current?.focus(), 30);
+        setPaletteOpen(true);
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         setSidebarOpen((o) => !o);
@@ -1307,82 +1437,6 @@ export default function App() {
       <div className="workbench">
         {sidebarOpen && (<>
         <aside className="sidebar" style={{ width: sidebarWidth }}>
-          <div className="search-box">
-            <input
-              ref={searchInputRef}
-              className="search-field"
-              placeholder="全文搜索…"
-              value={searchQuery}
-              spellCheck={false}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setSearchQuery("");
-              }}
-            />
-            <button
-              className={`search-opt${searchCase ? " on" : ""}`}
-              title="区分大小写"
-              onClick={() => setSearchCase((v) => !v)}
-            >
-              Aa
-            </button>
-            <button
-              className={`search-opt${searchRegex ? " on" : ""}`}
-              title="正则表达式"
-              onClick={() => setSearchRegex((v) => !v)}
-            >
-              .*
-            </button>
-          </div>
-          {searchResults ? (
-            <div className="search-results">
-              {searchResults.invalid ? (
-                <div className="search-note">无效的正则表达式</div>
-              ) : searchResults.hits.length === 0 ? (
-                <div className="search-note">未找到结果</div>
-              ) : (
-                (() => {
-                  const groups = new Map<string, SearchHit[]>();
-                  for (const h of searchResults.hits) {
-                    const g = groups.get(h.fileId);
-                    if (g) g.push(h);
-                    else groups.set(h.fileId, [h]);
-                  }
-                  return [...groups.entries()].map(([fid, hs]) => (
-                    <div key={fid} className="search-group">
-                      <div className="search-file">
-                        <img className="ficon" src={languageFor(hs[0].name).icon} alt="" />
-                        <span className="search-fname">{hs[0].name}</span>
-                        {hs[0].dir && <span className="search-fdir">{hs[0].dir}</span>}
-                        <span className="search-count">{hs.length}</span>
-                      </div>
-                      {hs.map((h, i) => (
-                        <button
-                          key={`${h.line}-${i}`}
-                          className="search-hit"
-                          title={`第 ${h.line} 行`}
-                          onClick={() => {
-                            openFileSmart(h.fileId);
-                            revealLine(h.fileId, h.line, h.start);
-                          }}
-                        >
-                          <span className="search-hit-text">
-                            {h.text.slice(Math.max(0, h.start - 24), h.start)}
-                            <mark>{h.text.slice(h.start, h.end)}</mark>
-                            {h.text.slice(h.end, h.end + 80)}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ));
-                })()
-              )}
-              {searchResults.truncated && <div className="search-note">结果过多，仅显示前 300 条</div>}
-              {searchResults.unloaded > 0 && (
-                <div className="search-note">{searchResults.unloaded} 个文件尚未加载，未参与搜索（后台预加载中，稍后重搜即可）</div>
-              )}
-            </div>
-          ) : (
           <div className="explorer-section">
             <div className="explorer-head" onClick={() => setTreeOpen((o) => !o)}>
               <span className={`twist${treeOpen ? " open" : ""}`} />
@@ -1406,6 +1460,10 @@ export default function App() {
             {treeOpen && (
               <nav
                 className="tree"
+                ref={treeNavRef}
+                onScroll={() => {
+                  if (treeNavRef.current) sidebarScrollRef.current = treeNavRef.current.scrollTop;
+                }}
                 onContextMenu={(e) =>
                   openMenu(e, [
                     { label: "新建文件…", run: () => newFile() },
@@ -1451,7 +1509,6 @@ export default function App() {
               </nav>
             )}
           </div>
-          )}
         </aside>
         <div
           className="sidebar-resizer"
@@ -1664,7 +1721,10 @@ export default function App() {
               initialDoc={active.content}
               dark={dark}
               onDocChange={onDocChange}
-              onCursor={setCursor}
+              onCursor={(c) => {
+                setCursor(c);
+                cursorMap.current.set(active.id, { line: c.line, col: c.col });
+              }}
             />
           )}
           {dropZone === "main-right" && <div className="drop-overlay right" />}
@@ -1780,7 +1840,10 @@ export default function App() {
                     initialDoc={sf.content}
                     dark={dark}
                     onDocChange={onDocChange}
-                    onCursor={setCursor}
+                    onCursor={(c) => {
+                      setCursor(c);
+                      cursorMap.current.set(sf.id, { line: c.line, col: c.col });
+                    }}
                   />
                 )}
                 {dropZone === "split-full" && <div className="drop-overlay full" />}
@@ -1830,6 +1893,9 @@ export default function App() {
                   <button className="icon-btn sm" title="新建终端" onClick={() => setConsoleTab("terminal")}>
                     <span className="cicon" style={{ "--icon": `url("${addIcon}")` } as React.CSSProperties} />
                   </button>
+                  <button className="icon-btn sm" title="复制全部输出 (Ctrl+Shift+C)" onClick={copyAllOutput}>
+                    <span className="cicon" style={{ "--icon": `url("${copiedTick ? checkIcon : copyIcon}")` } as React.CSSProperties} />
+                  </button>
                   <button className="icon-btn sm" title="清空" onClick={() => (consoleTab === "logs" ? setLogLines([]) : setConsoleLines([]))}>
                     <span className="cicon" style={{ "--icon": `url("${trashIcon}")` } as React.CSSProperties} />
                   </button>
@@ -1844,6 +1910,11 @@ export default function App() {
               <div className="console-main">
                 <div
                   className="console-body"
+                  ref={consoleBodyRef}
+                  onScroll={() => {
+                    const el = consoleBodyRef.current;
+                    if (el) consoleScrollPos.current.set(consoleTab, el.scrollTop);
+                  }}
                   onMouseUp={() => {
                     if (consoleTab !== "terminal" || running) return;
                     const sel = window.getSelection();
