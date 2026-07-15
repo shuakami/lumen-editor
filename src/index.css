@@ -743,6 +743,17 @@ html[data-theme="dark"] .hyper-scrollbar-thumb:hover { background: rgba(160, 160
   -webkit-mask: var(--icon) center / contain no-repeat;
   mask: var(--icon) center / contain no-repeat;
 }
+.palette-group {
+  padding: 10px 10px 4px; font-size: 10.5px; font-weight: 600;
+  color: var(--fg-3); letter-spacing: 0.06em; text-transform: uppercase;
+}
+.palette-item .presult { display: flex; align-items: baseline; gap: 8px; }
+.palette-item .ploc { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.palette-item .psnippet {
+  flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--font-mono); font-size: 12px; color: var(--fg-2);
+}
+.palette-item .psnippet mark { background: var(--focus); color: var(--fg); font-weight: 600; border-radius: 2px; padding: 0 1px; }
 .palette-item .plabel { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .palette-item .hint { margin-left: auto; flex: none; font-size: 11px; color: var(--fg-3); white-space: nowrap; }
 .palette-empty { padding: 24px; text-align: center; color: var(--fg-3); font-size: 12.5px; }

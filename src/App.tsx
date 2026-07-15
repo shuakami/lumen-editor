@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor, getCachedDoc, setCachedDoc, revealLine, openFindPanel, openGotoLine, type CursorInfo } from "./Editor";
 import { HyperEditor, HYPER_COUNT } from "./HyperEditor";
 import { SAMPLE_FILES, type SampleFile } from "./samples";
@@ -38,7 +38,24 @@ interface Command {
   hint?: string;
   fileIcon?: string;
   icon?: string;
+  group?: string;
+  loc?: string;
+  snippet?: string;
   run: () => void;
+}
+
+function highlightMatch(text: string, q: string): React.ReactNode {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return text;
+  const idx = text.toLowerCase().indexOf(needle);
+  if (idx < 0) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark>{text.slice(idx, idx + needle.length)}</mark>
+      {text.slice(idx + needle.length)}
+    </>
+  );
 }
 interface Renaming {
   kind: "file" | "folder";
@@ -1115,7 +1132,9 @@ export default function App() {
     const local = searchHits.map((h) => ({
       id: `hit-${h.fileId}-${h.line}`,
       label: `${h.dir ? `${h.dir}/` : ""}${h.name}:${h.line}  ·  ${h.text}`,
-      hint: "全文",
+      group: "全文搜索",
+      loc: `${h.dir ? `${h.dir}/` : ""}${h.name}:${h.line}`,
+      snippet: h.text,
       fileIcon: languageFor(h.name).icon,
       run: () => {
         openFileSmart(h.fileId);
@@ -1130,7 +1149,9 @@ export default function App() {
         return {
           id: `ghhit-${h.path}`,
           label: `${h.path}  ·  ${frag.slice(0, 80)}`,
-          hint: "GitHub",
+          group: "GitHub 搜索",
+          loc: h.path,
+          snippet: frag.slice(0, 80),
           fileIcon: languageFor(h.path).icon,
           run: () => {
             openFileSmart(`gh:${h.path}`);
@@ -2185,20 +2206,31 @@ export default function App() {
           <div className="palette-list">
             {filtered.length === 0 && <div className="palette-empty">没有匹配的命令</div>}
             {filtered.map((c, i) => (
-              <button
-                key={c.id}
-                className={`palette-item${i === hlIndex ? " hl" : ""}`}
-                onMouseEnter={() => setHlIndex(i)}
-                onClick={() => runCommand(c)}
-              >
-                {c.fileIcon ? (
-                  <img className="ficon" src={c.fileIcon} alt="" />
-                ) : (
-                  <span className="cicon" style={{ "--icon": `url("${c.icon}")` } as React.CSSProperties} />
+              <Fragment key={c.id}>
+                {c.group && (i === 0 || filtered[i - 1].group !== c.group) && (
+                  <div className="palette-group">{c.group}</div>
                 )}
-                <span className="plabel">{c.label}</span>
-                {c.hint && <span className="hint">{c.hint}</span>}
-              </button>
+                <button
+                  className={`palette-item${i === hlIndex ? " hl" : ""}`}
+                  onMouseEnter={() => setHlIndex(i)}
+                  onClick={() => runCommand(c)}
+                >
+                  {c.fileIcon ? (
+                    <img className="ficon" src={c.fileIcon} alt="" />
+                  ) : (
+                    <span className="cicon" style={{ "--icon": `url("${c.icon}")` } as React.CSSProperties} />
+                  )}
+                  {c.snippet !== undefined ? (
+                    <span className="plabel presult">
+                      <span className="ploc">{c.loc}</span>
+                      <span className="psnippet">{highlightMatch(c.snippet, query)}</span>
+                    </span>
+                  ) : (
+                    <span className="plabel">{c.label}</span>
+                  )}
+                  {c.hint && <span className="hint">{c.hint}</span>}
+                </button>
+              </Fragment>
             ))}
           </div>
         </div>
