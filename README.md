@@ -9,6 +9,9 @@ It ships with a Linear-style sync engine: the repository tree is snapshotted to 
 [![][github-stars-shield]][stars-link]
 [![][github-license-shield]][license-link]
 
+> \[!WARNING]
+> Lumen is still in **beta** — expect rough edges and the occasional bug. Actively being worked on.
+
 ## Features
 
 - **GitHub sync engine** — branch head SHA as the sync version, IndexedDB local bootstrap, `compare` API deltas, conflict-aware three-way merge, offline transaction queue
