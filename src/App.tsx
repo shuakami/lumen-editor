@@ -393,6 +393,7 @@ export default function App() {
   const termHistory = useRef<Array<{ label: string; fileId: string }>>([]);
   const [termInput, setTermInput] = useState("");
   const termHistIdx = useRef(-1);
+  const termInputRef = useRef<HTMLInputElement>(null);
 
   const runFile = useCallback(async (f: (typeof files)[number] | undefined) => {
     if (!f) return;
@@ -1698,7 +1699,15 @@ export default function App() {
                 </span>
               </div>
               <div className="console-main">
-                <div className="console-body">
+                <div
+                  className="console-body"
+                  onMouseUp={() => {
+                    if (consoleTab !== "terminal" || running) return;
+                    const sel = window.getSelection();
+                    if (sel && !sel.isCollapsed) return;
+                    termInputRef.current?.focus({ preventScroll: true });
+                  }}
+                >
                   {consoleTab === "problems" ? (
                     <div className="console-empty">目前尚未在工作区检测到问题。</div>
                   ) : consoleTab === "output" ? (
@@ -1745,6 +1754,7 @@ export default function App() {
                         <pre className="console-line cmd console-input-line">
                           <span className="console-prompt">wandbox:~$</span>{" "}
                           <input
+                            ref={termInputRef}
                             className="console-input"
                             value={termInput}
                             spellCheck={false}
