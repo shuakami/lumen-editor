@@ -247,7 +247,8 @@ export default function App() {
       if (meta?.loaded && meta.baseContent) {
         setFiles((fs) => fs.map((f) => (f.id === id && f.content === "" ? { ...f, content: meta.baseContent } : f)));
       }
-      if (!meta || meta.loaded || !ghTree || ghInflight.current.has(id)) return;
+      const tree = ghTreeRef.current;
+      if (!meta || meta.loaded || !tree || ghInflight.current.has(id)) return;
       ghInflight.current.add(id);
       setGhLoadingId(id);
       void (async () => {
@@ -256,7 +257,7 @@ export default function App() {
           if (IMAGE_EXTS.has(ext)) {
             let b64 = await cacheGet(meta.sha);
             if (b64 === null) {
-              b64 = await fetchBlobB64(ghTree.ref, meta.sha);
+              b64 = await fetchBlobB64(tree.ref, meta.sha);
               cachePut(meta.sha, b64);
             }
             const bytes = b64ToBytes(b64);
@@ -267,7 +268,7 @@ export default function App() {
           } else {
             let text = await cacheGet(meta.sha);
             if (text === null) {
-              text = await fetchBlob(ghTree.ref, meta.sha);
+              text = await fetchBlob(tree.ref, meta.sha);
               cachePut(meta.sha, text);
             }
             meta.baseContent = text;
@@ -283,11 +284,17 @@ export default function App() {
         }
       })();
     },
-    [ghTree]
+    []
   );
 
   const loadGhFileRef = useRef(loadGhFile);
   loadGhFileRef.current = loadGhFile;
+
+  useEffect(() => {
+    for (const id of [activeId, splitId]) {
+      if (id && ghMeta.current.has(id) && !ghMeta.current.get(id)!.loaded) loadGhFile(id);
+    }
+  }, [activeId, splitId, ghLoadedTick, loadGhFile]);
 
   const openFileSmart = useCallback(
     (id: string) => {
@@ -683,7 +690,7 @@ export default function App() {
       const token = tree.ref.token;
       preloader.current?.stop();
       const candidates: PreloadTarget[] = tree.entries.filter(
-        (e2) => !IMAGE_EXTS.has(fileExt(e2.path)) && e2.size > 0 && e2.size <= 300 * 1024
+        (e2) => !IMAGE_EXTS.has(fileExt(e2.path)) && e2.size <= 300 * 1024
       );
       const cached = await cacheGetMany(candidates.map((c) => c.sha));
       let hits = 0;
