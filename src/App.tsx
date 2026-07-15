@@ -9,7 +9,7 @@ import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBran
 import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, type SyncState } from "./syncengine";
 import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
 import { Preloader, type PreloadTarget } from "./preload";
-import { brainScore, brainRecordOpen, brainStats } from "./preload-brain";
+import { brainScore, brainRecordOpen, brainStats, brainSuccessors } from "./preload-brain";
 import { Loader } from "./Loader";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -317,7 +317,17 @@ export default function App() {
   const openFileSmart = useCallback(
     (id: string) => {
       const meta = ghMeta.current.get(id);
-      if (meta) brainRecordOpen(meta.path, meta.loaded);
+      if (meta) {
+        const dir = meta.path.includes("/") ? meta.path.slice(0, meta.path.lastIndexOf("/") + 1) : "";
+        const negatives: string[] = [];
+        for (const m of ghMeta.current.values()) {
+          if (negatives.length >= 3) break;
+          if (m.path !== meta.path && m.path.startsWith(dir) && !m.path.slice(dir.length).includes("/")) negatives.push(m.path);
+        }
+        brainRecordOpen(meta.path, meta.loaded, negatives);
+        const succ = brainSuccessors(meta.path).filter((p) => !(ghMeta.current.get(`gh:${p}`)?.loaded ?? true));
+        if (succ.length > 0) preloader.current?.boost(succ);
+      }
       loadGhFile(id);
       openFile(id);
     },
