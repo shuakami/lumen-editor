@@ -7,6 +7,7 @@ import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { languageFor } from "./editor/languages";
 import { editorTheme } from "./editor/theme";
+import { openSearchPanel, gotoLine } from "@codemirror/search";
  
 export interface CursorInfo {
   line: number;
@@ -54,6 +55,24 @@ export function revealLine(fileId: string, line: number, col = 0, attempts = 20)
   view.focus();
 }
  
+/** 打开指定文件编辑器的查找面板。 */
+export function openFindPanel(fileId: string): boolean {
+  const view = viewRegistry.get(fileId);
+  if (!view) return false;
+  view.focus();
+  openSearchPanel(view);
+  return true;
+}
+
+/** 打开指定文件编辑器的跳转到行面板。 */
+export function openGotoLine(fileId: string): boolean {
+  const view = viewRegistry.get(fileId);
+  if (!view) return false;
+  view.focus();
+  gotoLine(view);
+  return true;
+}
+
 export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCursor }: EditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);

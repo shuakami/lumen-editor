@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Editor, getCachedDoc, setCachedDoc, revealLine, type CursorInfo } from "./Editor";
+import { Editor, getCachedDoc, setCachedDoc, revealLine, openFindPanel, openGotoLine, type CursorInfo } from "./Editor";
 import { HyperEditor, HYPER_COUNT } from "./HyperEditor";
 import { SAMPLE_FILES, type SampleFile } from "./samples";
 import { languageFor } from "./editor/languages";
@@ -195,6 +195,10 @@ export default function App() {
  
   const active = openIds.includes(activeId) ? files.find((f) => f.id === activeId) : undefined;
   const paletteRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    paletteRef.current?.querySelector(".palette-item.hl")?.scrollIntoView({ block: "nearest" });
+  }, [hlIndex]);
  
   const dirs = useMemo(() => {
     const set = new Set<string>();
@@ -1093,10 +1097,10 @@ export default function App() {
       { id: "github", label: "打开 GitHub 仓库…", icon: searchIcon, run: () => { setGhError(""); setGhStep(0); setGhOpen(true); } },
       { id: "newfile", label: "新建文件", icon: newFileIcon, run: () => newFile() },
       { id: "theme", label: dark ? "切换到浅色主题" : "切换到深色主题", icon: colorModeIcon, run: () => setDark((d) => !d) },
-      { id: "find", label: "文件内查找", hint: "Ctrl F", icon: searchIcon, run: () => {} },
-      { id: "gotoline", label: "跳转到行", hint: "Ctrl G", icon: arrowRightIcon, run: () => {} },
+      { id: "find", label: "文件内查找", hint: "Ctrl F", icon: searchIcon, run: () => { if (activeId) window.setTimeout(() => openFindPanel(activeId), 30); } },
+      { id: "gotoline", label: "跳转到行", hint: "Ctrl G", icon: arrowRightIcon, run: () => { if (activeId) window.setTimeout(() => openGotoLine(activeId), 30); } },
     ],
-    [files, openFileSmart, dark, newFile]
+    [files, openFileSmart, dark, newFile, activeId]
   );
  
   const searchCommands = useMemo<Command[]>(() => {
@@ -2185,7 +2189,7 @@ export default function App() {
                 ) : (
                   <span className="cicon" style={{ "--icon": `url("${c.icon}")` } as React.CSSProperties} />
                 )}
-                {c.label}
+                <span className="plabel">{c.label}</span>
                 {c.hint && <span className="hint">{c.hint}</span>}
               </button>
             ))}

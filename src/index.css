@@ -743,7 +743,8 @@ html[data-theme="dark"] .hyper-scrollbar-thumb:hover { background: rgba(160, 160
   -webkit-mask: var(--icon) center / contain no-repeat;
   mask: var(--icon) center / contain no-repeat;
 }
-.palette-item .hint { margin-left: auto; font-size: 11px; color: var(--fg-3); }
+.palette-item .plabel { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-item .hint { margin-left: auto; flex: none; font-size: 11px; color: var(--fg-3); white-space: nowrap; }
 .palette-empty { padding: 24px; text-align: center; color: var(--fg-3); font-size: 12.5px; }
  
 /* ---------- codemirror popups ---------- */
