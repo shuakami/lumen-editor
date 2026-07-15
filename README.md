@@ -6,9 +6,6 @@ It ships with a Linear-style sync engine: the repository tree is snapshotted to 
 
 **[Live Demo][demo-link]** **[Report Issues][issues-link]**
 
-[![][github-stars-shield]][stars-link]
-[![][github-license-shield]][license-link]
-
 > \[!WARNING]
 > Lumen is still in **beta** — expect rough edges and the occasional bug. Actively being worked on.
 
@@ -47,7 +44,4 @@ Or just open the [live demo][demo-link] — then `File → Open GitHub Repositor
 [image-banner]: docs/images/banner.png
 [demo-link]: https://shuakami.github.io/lumen-editor/
 [issues-link]: https://github.com/shuakami/lumen-editor/issues
-[stars-link]: https://github.com/shuakami/lumen-editor/stargazers
 [license-link]: LICENSE
-[github-stars-shield]: https://img.shields.io/github/stars/shuakami/lumen-editor?color=317cfe&labelColor=black&style=flat-square
-[github-license-shield]: https://img.shields.io/badge/license-MIT-317cfe?labelColor=black&style=flat-square
