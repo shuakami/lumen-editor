@@ -25,17 +25,34 @@ export class Preloader {
   private queue: PreloadTarget[] = [];
   private active = 0;
   private stopped = false;
+  private startedAt = 0;
+  private fetched = 0;
+  private bytes = 0;
+  private idleNotified = false;
 
   constructor(
     private ref: GhRepoRef,
     private concurrency: number,
     private isDone: (path: string) => boolean,
-    private onText: (path: string, sha: string, text: string) => void
+    private onText: (path: string, sha: string, text: string) => void,
+    private onIdle?: (stats: { fetched: number; bytes: number; ms: number }) => void
   ) {}
 
-  start(targets: PreloadTarget[]): void {
-    this.queue = [...targets].sort((a, b) => preloadScore(a) - preloadScore(b));
+  start(targets: PreloadTarget[], adjust?: (path: string) => number): void {
+    this.startedAt = performance.now();
+    const score = (t: PreloadTarget) => preloadScore(t) - (adjust?.(t.path) ?? 0) * 8;
+    this.queue = [...targets].sort((a, b) => score(a) - score(b));
+    if (this.queue.length === 0) {
+      this.notifyIdle();
+      return;
+    }
     this.pump();
+  }
+
+  private notifyIdle(): void {
+    if (this.idleNotified || this.stopped) return;
+    this.idleNotified = true;
+    this.onIdle?.({ fetched: this.fetched, bytes: this.bytes, ms: performance.now() - this.startedAt });
   }
 
   /** 悬停/展开目录时插队到最前，最先抓取。 */
@@ -61,12 +78,17 @@ export class Preloader {
       while ((next = this.queue.shift())) {
         if (!this.isDone(next.path)) break;
       }
-      if (!next) return;
+      if (!next) {
+        if (this.active === 0) this.notifyIdle();
+        return;
+      }
       this.active++;
       const t = next;
       void fetchBlob(this.ref, t.sha)
         .then((text) => {
           if (this.stopped || this.isDone(t.path)) return;
+          this.fetched++;
+          this.bytes += text.length;
           cachePut(t.sha, text);
           this.onText(t.path, t.sha, text);
         })

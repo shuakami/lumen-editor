@@ -9,6 +9,7 @@ import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBran
 import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, type SyncState } from "./syncengine";
 import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
 import { Preloader, type PreloadTarget } from "./preload";
+import { brainScore, brainRecordOpen, brainStats } from "./preload-brain";
 import { Loader } from "./Loader";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -315,6 +316,8 @@ export default function App() {
 
   const openFileSmart = useCallback(
     (id: string) => {
+      const meta = ghMeta.current.get(id);
+      if (meta) brainRecordOpen(meta.path, meta.loaded);
       loadGhFile(id);
       openFile(id);
     },
@@ -623,6 +626,7 @@ export default function App() {
   /** 将一棵仓库树应用到编辑器（全量/本地引导共用），并启动同步引擎。 */
   const applyTree = useCallback(
     async (tree: GhTree) => {
+      const bootT0 = performance.now();
       ghMeta.current.clear();
       const fs: SampleFile[] = tree.entries.map((e) => {
         const slash = e.path.lastIndexOf("/");
@@ -723,9 +727,11 @@ export default function App() {
       }
       if (hits > 0) setGhLoadedTick((n) => n + 1);
       const remaining = candidates.filter((c) => !ghMeta.current.get(`gh:${c.path}`)?.loaded);
+      const concurrency = token ? 8 : 4;
+      appendLog([{ kind: "info", text: `开屏诊断：文件树 ${fs.length} 个文件，内容缓存命中 ${hits}/${candidates.length}，待预加载 ${remaining.length} 个（并发 ${concurrency}），引导耗时 ${Math.round(performance.now() - bootT0)} ms` }]);
       const p = new Preloader(
         tree.ref,
-        token ? 8 : 4,
+        concurrency,
         (path) => ghMeta.current.get(`gh:${path}`)?.loaded ?? true,
         (path, _sha, text) => {
           const m = ghMeta.current.get(`gh:${path}`);
@@ -733,10 +739,15 @@ export default function App() {
           m.baseContent = text;
           m.loaded = true;
           setGhLoadedTick((n) => n + 1);
+        },
+        (stats) => {
+          const b = brainStats();
+          const acc = b.hits + b.misses === 0 ? "暂无数据" : `${Math.round(b.accuracy * 100)}%（猜对 ${b.hits} / 猜错 ${b.misses}）`;
+          appendLog([{ kind: "info", text: `预加载完成：${stats.fetched} 个文件 / ${Math.round(stats.bytes / 1024)} KB，耗时 ${(stats.ms / 1000).toFixed(1)} s；预加载模型累计命中率 ${acc}` }]);
         }
       );
       preloader.current = p;
-      p.start(remaining.slice(0, token ? 1000 : 40));
+      p.start(remaining.slice(0, token ? 1000 : 40), brainScore);
     },
     [appendLog, startEngine]
   );
