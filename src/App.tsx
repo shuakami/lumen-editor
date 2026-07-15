@@ -1,0 +1,1872 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Editor, getCachedDoc, setCachedDoc, type CursorInfo } from "./Editor";
+import { HyperEditor, HYPER_COUNT } from "./HyperEditor";
+import { SAMPLE_FILES, type SampleFile } from "./samples";
+import { languageFor } from "./editor/languages";
+import { applyCodeScale } from "./editor/scale";
+import { isRunnable, runCode, runCommandLabel } from "./editor/run";
+import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, type GhTree, type GhBranch, type GhFileDelta } from "./github";
+import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, type SyncState } from "./syncengine";
+import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
+import { Preloader, type PreloadTarget } from "./preload";
+import { Loader } from "./Loader";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
+import colorModeIcon from "./assets/codicons/color-mode.svg";
+import searchIcon from "./assets/codicons/search.svg";
+import arrowRightIcon from "./assets/codicons/arrow-right.svg";
+import newFileIcon from "./assets/codicons/new-file.svg";
+import newFolderIcon from "./assets/codicons/new-folder.svg";
+import refreshIcon from "./assets/codicons/refresh.svg";
+import collapseAllIcon from "./assets/codicons/collapse-all.svg";
+import playIcon from "./assets/codicons/play.svg";
+import splitIcon from "./assets/codicons/split-horizontal.svg";
+import trashIcon from "./assets/codicons/trash.svg";
+import closeIcon from "./assets/codicons/close.svg";
+import checkIcon from "./assets/codicons/check.svg";
+import addIcon from "./assets/codicons/add.svg";
+import ellipsisIcon from "./assets/codicons/ellipsis.svg";
+import pwshIcon from "./assets/codicons/terminal-powershell.svg";
+import layoutPanelIcon from "./assets/codicons/layout-panel.svg";
+import openPreviewIcon from "./assets/codicons/open-preview.svg";
+import logoGlyph from "./assets/logo-glyph.png";
+import layoutPanelOffIcon from "./assets/codicons/layout-panel-off.svg";
+interface Command {
+  id: string;
+  label: string;
+  hint?: string;
+  fileIcon?: string;
+  icon?: string;
+  run: () => void;
+}
+interface Renaming {
+  kind: "file" | "folder";
+  id: string;
+  isNew: boolean;
+}
+ 
+interface CtxItem {
+  label?: string;
+  hint?: string;
+  danger?: boolean;
+  sep?: boolean;
+  checked?: boolean;
+  run?: () => void;
+}
+ 
+interface ConsoleLine {
+  kind: "cmd" | "out" | "err" | "info";
+  text: string;
+  ok?: boolean;
+}
+ 
+interface CtxMenu {
+  x: number;
+  y: number;
+  items: CtxItem[];
+}
+
+interface DirNode {
+  name: string;
+  path: string;
+  dirs: DirNode[];
+  files: SampleFile[];
+}
+
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "ico", "webp", "bmp", "avif"]);
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+  ico: "image/x-icon", webp: "image/webp", bmp: "image/bmp", avif: "image/avif",
+};
+function fileExt(name: string): string {
+  const i = name.lastIndexOf(".");
+  return i < 0 ? "" : name.slice(i + 1).toLowerCase();
+}
+function ancestorDirs(dir: string): string[] {
+  const out: string[] = [];
+  let d = dir;
+  while (d) {
+    out.push(d);
+    const i = d.lastIndexOf("/");
+    d = i < 0 ? "" : d.slice(0, i);
+  }
+  return out;
+}
+ 
+const HAS_SAVED_REPO = localStorage.getItem("lumen.gh.repo") !== null;
+
+export default function App() {
+  const [openIds, setOpenIds] = useState<string[]>(HAS_SAVED_REPO ? [] : ["program", "hyper"]);
+  const [activeId, setActiveId] = useState(HAS_SAVED_REPO ? "" : "program");
+  const [cursor, setCursor] = useState<CursorInfo>({ line: 1, col: 1, length: 0, selections: 1 });
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hlIndex, setHlIndex] = useState(0);
+  const [dirty, setDirty] = useState<Set<string>>(new Set());
+  const [dark, setDark] = useState(false);
+  const [files, setFiles] = useState<SampleFile[]>(HAS_SAVED_REPO ? [] : SAMPLE_FILES);
+  const [ghRestoring, setGhRestoring] = useState(HAS_SAVED_REPO);
+  const [extraFolders, setExtraFolders] = useState<string[]>([]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [treeOpen, setTreeOpen] = useState(true);
+  const [renaming, setRenaming] = useState<Renaming | null>(null);
+  const [renameText, setRenameText] = useState("");
+  const [menu, setMenu] = useState<CtxMenu | null>(null);
+  const [autoSave, setAutoSave] = useState(true);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleTab, setConsoleTab] = useState<"problems" | "output" | "debug" | "terminal" | "ports">("terminal");
+  const [consoleHeight, setConsoleHeight] = useState(260);
+  const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([]);
+  const [running, setRunning] = useState(false);
+  const [splitId, setSplitId] = useState<string | null>(null);
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  const dragTabId = useRef<string | null>(null);
+  const [dropZone, setDropZone] = useState<null | "main-right" | "main-full" | "split-full">(null);
+  const [openMenubar, setOpenMenubar] = useState<string | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [aboutClosing, setAboutClosing] = useState(false);
+  const closeAbout = useCallback(() => {
+    setAboutClosing(true);
+    window.setTimeout(() => {
+      setAboutOpen(false);
+      setAboutClosing(false);
+    }, 180);
+  }, []);
+  const [ghOpen, setGhOpen] = useState(false);
+  const [ghStep, setGhStep] = useState(0);
+  const [ghRepoInput, setGhRepoInput] = useState("");
+  const [ghTokenInput, setGhTokenInput] = useState(() => localStorage.getItem("lumen.gh.token") ?? "");
+  const [ghBranchInput, setGhBranchInput] = useState("");
+  const [ghBusy, setGhBusy] = useState(false);
+  const [ghError, setGhError] = useState("");
+  const [ghTree, setGhTree] = useState<GhTree | null>(null);
+  const ghMeta = useRef(new Map<string, { path: string; sha: string; baseContent: string; loaded: boolean }>());
+  const [ghLoadingId, setGhLoadingId] = useState<string | null>(null);
+  const ghInflight = useRef(new Set<string>());
+  const [, setGhLoadedTick] = useState(0);
+  const [commitError, setCommitError] = useState("");
+  const [mdPreviewIds, setMdPreviewIds] = useState<Set<string>>(new Set());
+  const preloader = useRef<Preloader | null>(null);
+  const [ghImages, setGhImages] = useState<Map<string, string>>(new Map());
+  const [commitFor, setCommitFor] = useState<string | null>(null);
+  const [commitMsg, setCommitMsg] = useState("");
+  const [commitBusy, setCommitBusy] = useState(false);
+  const engine = useRef<SyncEngine | null>(null);
+  const [syncStatus, setSyncStatus] = useState<{ state: SyncState; pending: number }>({ state: "synced", pending: 0 });
+  const [branches, setBranches] = useState<GhBranch[] | null>(null);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [branchBusy, setBranchBusy] = useState(false);
+  const handleDeltasRef = useRef<(deltas: GhFileDelta[], newHead: string) => void>(() => {});
+  const untitledCount = useRef(0);
+  const autoSaveRef = useRef(autoSave);
+  autoSaveRef.current = autoSave;
+  const consoleEndRef = useRef<HTMLDivElement>(null);
+ 
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.add("theme-switching");
+    root.dataset.theme = dark ? "dark" : "light";
+    const t = window.setTimeout(() => root.classList.remove("theme-switching"), 300);
+    return () => window.clearTimeout(t);
+  }, [dark]);
+ 
+  useEffect(() => {
+    applyCodeScale();
+    window.addEventListener("resize", applyCodeScale);
+    return () => window.removeEventListener("resize", applyCodeScale);
+  }, []);
+ 
+  const active = openIds.includes(activeId) ? files.find((f) => f.id === activeId) : undefined;
+  const paletteRef = useRef<HTMLDivElement>(null);
+ 
+  const dirs = useMemo(() => {
+    const set = new Set<string>();
+    for (const f of files) if (f.dir) for (const d of ancestorDirs(f.dir)) set.add(d);
+    for (const d of extraFolders) set.add(d);
+    return [...set].sort();
+  }, [files, extraFolders]);
+
+  const ghRoot = useMemo(() => {
+    if (!ghTree) return null;
+    const root: DirNode = { name: "", path: "", dirs: [], files: [] };
+    const map = new Map<string, DirNode>([["", root]]);
+    const getDir = (path: string): DirNode => {
+      const hit = map.get(path);
+      if (hit) return hit;
+      const i = path.lastIndexOf("/");
+      const parent = getDir(i < 0 ? "" : path.slice(0, i));
+      const node: DirNode = { name: i < 0 ? path : path.slice(i + 1), path, dirs: [], files: [] };
+      parent.dirs.push(node);
+      map.set(path, node);
+      return node;
+    };
+    for (const f of files) getDir(f.dir ?? "").files.push(f);
+    const sortNode = (n: DirNode) => {
+      n.dirs.sort((a, b) => a.name.localeCompare(b.name));
+      n.files.sort((a, b) => a.name.localeCompare(b.name));
+      n.dirs.forEach(sortNode);
+    };
+    sortNode(root);
+    return root;
+  }, [ghTree, files]);
+ 
+  const rootFiles = useMemo(
+    () => files.filter((f) => !f.dir).sort((a, b) => a.name.localeCompare(b.name)),
+    [files]
+  );
+ 
+  const openFile = useCallback((id: string) => {
+    setOpenIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+    setActiveId(id);
+  }, []);
+
+  const loadGhFile = useCallback(
+    (id: string) => {
+      const meta = ghMeta.current.get(id);
+      if (meta?.loaded && meta.baseContent) {
+        setFiles((fs) => fs.map((f) => (f.id === id && f.content === "" ? { ...f, content: meta.baseContent } : f)));
+      }
+      if (!meta || meta.loaded || !ghTree || ghInflight.current.has(id)) return;
+      ghInflight.current.add(id);
+      setGhLoadingId(id);
+      void (async () => {
+        try {
+          const ext = fileExt(meta.path);
+          if (IMAGE_EXTS.has(ext)) {
+            let b64 = await cacheGet(meta.sha);
+            if (b64 === null) {
+              b64 = await fetchBlobB64(ghTree.ref, meta.sha);
+              cachePut(meta.sha, b64);
+            }
+            const bytes = b64ToBytes(b64);
+            const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: IMAGE_MIME[ext] }));
+            setGhImages((m) => new Map(m).set(id, url));
+            meta.loaded = true;
+            setGhLoadedTick((n) => n + 1);
+          } else {
+            let text = await cacheGet(meta.sha);
+            if (text === null) {
+              text = await fetchBlob(ghTree.ref, meta.sha);
+              cachePut(meta.sha, text);
+            }
+            meta.baseContent = text;
+            meta.loaded = true;
+            setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, content: text } : f)));
+          }
+        } catch (e) {
+          setConsoleOpen(true);
+          setConsoleLines((prev) => [...prev, { kind: "err", text: `GitHub：读取文件失败 — ${(e as Error).message}` }]);
+        } finally {
+          ghInflight.current.delete(id);
+          setGhLoadingId((cur) => (cur === id ? null : cur));
+        }
+      })();
+    },
+    [ghTree]
+  );
+
+  const openFileSmart = useCallback(
+    (id: string) => {
+      loadGhFile(id);
+      openFile(id);
+    },
+    [loadGhFile, openFile]
+  );
+ 
+  const closeFile = useCallback((id: string) => {
+    setOpenIds((ids) => {
+      const next = ids.filter((x) => x !== id);
+      setActiveId((cur) => {
+        if (cur !== id) return cur;
+        const idx = ids.indexOf(id);
+        return next[Math.max(0, idx - 1)] ?? "";
+      });
+      return next;
+    });
+  }, []);
+ 
+  const closeOthers = useCallback((id: string) => {
+    setOpenIds([id]);
+    setActiveId(id);
+  }, []);
+ 
+  const closeToRight = useCallback((id: string) => {
+    setOpenIds((ids) => {
+      const idx = ids.indexOf(id);
+      const next = ids.slice(0, idx + 1);
+      setActiveId((cur) => (next.includes(cur) ? cur : id));
+      return next;
+    });
+  }, []);
+ 
+  const closeAll = useCallback(() => {
+    setOpenIds([]);
+    setActiveId("");
+  }, []);
+ 
+  const reorderTab = useCallback((fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setOpenIds((ids) => {
+      const from = ids.indexOf(fromId);
+      const to = ids.indexOf(toId);
+      if (from < 0 || to < 0) return ids;
+      const next = [...ids];
+      next.splice(from, 1);
+      next.splice(to, 0, fromId);
+      return next;
+    });
+  }, []);
+ 
+  const onDocChange = useCallback((fileId: string) => {
+    if (autoSaveRef.current) return;
+    setDirty((d) => (d.has(fileId) ? d : new Set(d).add(fileId)));
+  }, []);
+ 
+  const appendConsole = useCallback((lines: ConsoleLine[]) => {
+    setConsoleLines((prev) => [...prev, ...lines]);
+  }, []);
+ 
+  useEffect(() => {
+    consoleEndRef.current?.scrollIntoView({ block: "end" });
+  }, [consoleLines, consoleOpen]);
+ 
+  const runActive = useCallback(async () => {
+    const f = files.find((x) => x.id === activeId && openIds.includes(x.id));
+    if (!f) return;
+    setConsoleOpen(true);
+    if (f.hyper) {
+      appendConsole([{ kind: "info", text: "该文件为演示用超大文件，无法运行。" }]);
+      return;
+    }
+    const lang = languageFor(f.name);
+    if (!isRunnable(lang.id)) {
+      appendConsole([{ kind: "info", text: `暂不支持运行 ${lang.label} 文件。` }]);
+      return;
+    }
+    setRunning(true);
+    setConsoleTab("terminal");
+    appendConsole([{ kind: "cmd", text: runCommandLabel(lang.id, `${f.dir ? `${f.dir}/` : ""}${f.name}`) }]);
+    try {
+      const r = await runCode(lang.id, getCachedDoc(f.id, f.content));
+      const out: ConsoleLine[] = [];
+      if (r.compileOutput.trim()) out.push({ kind: r.ok ? "out" : "err", text: r.compileOutput.trimEnd() });
+      if (r.output.trim()) out.push({ kind: r.ok ? "out" : "err", text: r.output.trimEnd() });
+      out.push({ kind: "info", text: `进程已结束，退出代码 ${r.code ?? "未知"}` });
+      setConsoleLines((prev) => {
+        const next = [...prev];
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].kind === "cmd") { next[i] = { ...next[i], ok: r.ok }; break; }
+        }
+        return [...next, ...out];
+      });
+    } catch {
+      appendConsole([{ kind: "err", text: "运行失败：无法连接运行服务，请检查网络。" }]);
+    } finally {
+      setRunning(false);
+    }
+  }, [files, activeId, openIds, appendConsole]);
+ 
+  const saveFile = useCallback((id?: string) => {
+    setDirty((d) => {
+      if (!id) return new Set();
+      const next = new Set(d);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+ 
+  const startEngine = useCallback(
+    (tree: GhTree) => {
+      engine.current?.stop();
+      const e = new SyncEngine(tree.ref, tree.headSha, {
+        onDeltas: (deltas, newHead) => handleDeltasRef.current(deltas, newHead),
+        onTransactionDone: (tx, r) => {
+          const id = `gh:${tx.path}`;
+          const meta = ghMeta.current.get(id);
+          if (meta) {
+            if (r.newSha) meta.sha = r.newSha;
+            meta.baseContent = tx.content;
+          }
+          appendConsole([{ kind: "info", text: `GitHub：${tx.path} ${r.message}` }]);
+        },
+        onTransactionError: (tx, err, willRetry) => {
+          if (willRetry) {
+            appendConsole([{ kind: "info", text: `同步引擎：${tx.path} 提交暂时失败（${err.message}），事务已保留，恢复后自动重试` }]);
+          } else {
+            setConsoleOpen(true);
+            appendConsole([{ kind: "err", text: `GitHub：${tx.path} 提交失败 — ${err.message}` }]);
+          }
+        },
+        onState: (state, pending) => setSyncStatus({ state, pending }),
+        onInfo: (text) => appendConsole([{ kind: "info", text }]),
+      });
+      engine.current = e;
+      void e.start();
+    },
+    [appendConsole]
+  );
+
+  /** 将一棵仓库树应用到编辑器（全量/本地引导共用），并启动同步引擎。 */
+  const applyTree = useCallback(
+    async (tree: GhTree) => {
+      ghMeta.current.clear();
+      const fs: SampleFile[] = tree.entries.map((e) => {
+        const slash = e.path.lastIndexOf("/");
+        const id = `gh:${e.path}`;
+        ghMeta.current.set(id, { path: e.path, sha: e.sha, baseContent: "", loaded: false });
+        return {
+          id,
+          name: slash < 0 ? e.path : e.path.slice(slash + 1),
+          dir: slash < 0 ? undefined : e.path.slice(0, slash),
+          content: "",
+        };
+      });
+      setGhTree(tree);
+      setFiles(fs);
+      setOpenIds([]);
+      setActiveId("");
+      setSplitId(null);
+      setExtraFolders([]);
+      setDirty(new Set());
+      setGhImages((m) => {
+        for (const url of m.values()) URL.revokeObjectURL(url);
+        return new Map();
+      });
+      setCollapsed(new Set(fs.flatMap((f) => (f.dir ? ancestorDirs(f.dir) : []))));
+      setGhOpen(false);
+      appendConsole([{ kind: "info", text: `GitHub：已打开 ${tree.ref.owner}/${tree.ref.repo}@${tree.ref.branch}（${fs.length} 个文件）` }]);
+
+      startEngine(tree);
+      void saveSnapshot({ key: repoKey(tree.ref), headSha: tree.headSha, entries: tree.entries, updatedAt: Date.now() });
+      setBranches(null);
+      void listBranches(tree.ref).then(setBranches).catch(() => {});
+
+      const token = tree.ref.token;
+      preloader.current?.stop();
+      const candidates: PreloadTarget[] = tree.entries.filter(
+        (e2) => !IMAGE_EXTS.has(fileExt(e2.path)) && e2.size > 0 && e2.size <= 300 * 1024
+      );
+      const cached = await cacheGetMany(candidates.map((c) => c.sha));
+      let hits = 0;
+      for (const c of candidates) {
+        const text = cached.get(c.sha);
+        if (text === undefined) continue;
+        const m = ghMeta.current.get(`gh:${c.path}`);
+        if (m && !m.loaded) {
+          m.baseContent = text;
+          m.loaded = true;
+          hits++;
+        }
+      }
+      if (hits > 0) setGhLoadedTick((n) => n + 1);
+      const remaining = candidates.filter((c) => !ghMeta.current.get(`gh:${c.path}`)?.loaded);
+      const p = new Preloader(
+        tree.ref,
+        token ? 8 : 4,
+        (path) => ghMeta.current.get(`gh:${path}`)?.loaded ?? true,
+        (path, _sha, text) => {
+          const m = ghMeta.current.get(`gh:${path}`);
+          if (!m || m.loaded) return;
+          m.baseContent = text;
+          m.loaded = true;
+          setGhLoadedTick((n) => n + 1);
+        }
+      );
+      preloader.current = p;
+      p.start(remaining.slice(0, token ? 1000 : 40));
+    },
+    [appendConsole, startEngine]
+  );
+
+  const openGithubRepo = useCallback(async (repoInput: string, tokenInput: string, branchInput: string): Promise<boolean> => {
+    const parsed = parseRepoInput(repoInput);
+    if (!parsed) {
+      setGhError("无法识别仓库地址，支持 owner/repo 或完整 GitHub URL");
+      return false;
+    }
+    setGhBusy(true);
+    setGhError("");
+    try {
+      const token = tokenInput.trim() || undefined;
+      const tree = await openRepo(parsed.owner, parsed.repo, token, branchInput);
+      if (token) localStorage.setItem("lumen.gh.token", token);
+      else localStorage.removeItem("lumen.gh.token");
+      localStorage.setItem("lumen.gh.repo", `${parsed.owner}/${parsed.repo}`);
+      localStorage.setItem("lumen.gh.branch", tree.ref.branch);
+      await applyTree(tree);
+      return true;
+    } catch (e) {
+      setGhError((e as Error).message);
+      return false;
+    } finally {
+      setGhBusy(false);
+    }
+  }, [applyTree]);
+
+  const boostPreload = useCallback((paths: string[]) => {
+    preloader.current?.boost(paths.filter((p) => !(ghMeta.current.get(`gh:${p}`)?.loaded ?? true)));
+  }, []);
+
+  const connectGithub = useCallback(
+    () => openGithubRepo(ghRepoInput, ghTokenInput, ghBranchInput),
+    [openGithubRepo, ghRepoInput, ghTokenInput, ghBranchInput]
+  );
+
+  const restoredRepo = useRef(false);
+  useEffect(() => {
+    if (restoredRepo.current) return;
+    restoredRepo.current = true;
+    const repo = localStorage.getItem("lumen.gh.repo");
+    if (!repo) return;
+    const branch = localStorage.getItem("lumen.gh.branch") ?? "";
+    const token = localStorage.getItem("lumen.gh.token") ?? "";
+    setGhRepoInput(repo);
+    setGhBranchInput(branch);
+    void (async () => {
+      // 本地引导（local bootstrap）：先从 IndexedDB 快照秒开，再由同步引擎增量追平
+      const parsed = parseRepoInput(repo);
+      if (parsed) {
+        const br = branch.trim() || localStorage.getItem("lumen.gh.branch") || "";
+        if (br) {
+          const snap = await loadSnapshot(`${parsed.owner}/${parsed.repo}@${br}`);
+          if (snap) {
+            await applyTree({
+              ref: { owner: parsed.owner, repo: parsed.repo, branch: br, token: token.trim() || undefined },
+              entries: snap.entries,
+              headSha: snap.headSha,
+            });
+            appendConsole([{ kind: "info", text: "同步引擎：本地引导完成，正在后台增量同步…" }]);
+            setGhRestoring(false);
+            void engine.current?.pollOnce();
+            return;
+          }
+        }
+      }
+      const ok = await openGithubRepo(repo, token, branch);
+      if (!ok) {
+        setFiles(SAMPLE_FILES);
+        setOpenIds(["program", "hyper"]);
+        setActiveId("program");
+      }
+      setGhRestoring(false);
+    })();
+  }, [openGithubRepo, applyTree, appendConsole]);
+
+  const closeGithub = useCallback(() => {
+    preloader.current?.stop();
+    preloader.current = null;
+    engine.current?.stop();
+    engine.current = null;
+    setBranches(null);
+    setBranchMenuOpen(false);
+    setSyncStatus({ state: "synced", pending: 0 });
+    localStorage.removeItem("lumen.gh.repo");
+    localStorage.removeItem("lumen.gh.branch");
+    ghMeta.current.clear();
+    setGhImages((m) => {
+      for (const url of m.values()) URL.revokeObjectURL(url);
+      return new Map();
+    });
+    setGhTree(null);
+    setFiles(SAMPLE_FILES);
+    setOpenIds([]);
+    setActiveId("");
+    setSplitId(null);
+    setCollapsed(new Set());
+    setDirty(new Set());
+  }, []);
+
+  const doCommit = useCallback(async () => {
+    if (!commitFor || !ghTree) return;
+    const meta = ghMeta.current.get(commitFor);
+    const f = files.find((x) => x.id === commitFor);
+    if (!meta || !f) return;
+    if (!ghTree.ref.token) {
+      setCommitError("未填写访问令牌（ghp_…），无法提交。请在 File → 打开 GitHub 仓库 里填入后重新打开仓库。");
+      return;
+    }
+    if (!engine.current) return;
+    setCommitBusy(true);
+    setCommitError("");
+    const content = getCachedDoc(f.id, f.content);
+    await engine.current.enqueue({
+      path: meta.path,
+      baseSha: meta.sha,
+      baseContent: meta.baseContent,
+      content,
+      message: commitMsg.trim() || `Update ${meta.path}`,
+    });
+    setConsoleOpen(true);
+    if (!navigator.onLine) {
+      appendConsole([{ kind: "info", text: `同步引擎：${meta.path} 已入队（当前离线，联网后自动提交）` }]);
+    }
+    setCommitBusy(false);
+    setCommitFor(null);
+  }, [commitFor, ghTree, files, commitMsg, appendConsole]);
+
+  /** 应用远端 delta packets：文件树、元数据、打开中的文件实时热更新。 */
+  handleDeltasRef.current = (deltas, newHead) => {
+    const tree = ghTree;
+    if (!tree) return;
+    const notes: string[] = [];
+    const removedIds: string[] = [];
+    for (const d of deltas) {
+      const oldPath = d.status === "renamed" ? d.previousPath : d.status === "removed" ? d.path : undefined;
+      if (oldPath) {
+        const rid = `gh:${oldPath}`;
+        ghMeta.current.delete(rid);
+        removedIds.push(rid);
+        if (d.status === "removed") {
+          notes.push(`删除 ${oldPath}`);
+          continue;
+        }
+      }
+      const id = `gh:${d.path}`;
+      const meta = ghMeta.current.get(id);
+      if (meta && meta.sha === d.sha) continue; // 本地事务的回声，跳过
+      notes.push(`${d.status === "added" ? "新增" : d.status === "renamed" ? `重命名 ${d.previousPath} → ` : "更新"} ${d.path}`);
+      const slash = d.path.lastIndexOf("/");
+      if (!meta) {
+        ghMeta.current.set(id, { path: d.path, sha: d.sha, baseContent: "", loaded: false });
+        setFiles((fs) =>
+          fs.some((f) => f.id === id)
+            ? fs
+            : [...fs, { id, name: slash < 0 ? d.path : d.path.slice(slash + 1), dir: slash < 0 ? undefined : d.path.slice(0, slash), content: "" }]
+        );
+        continue;
+      }
+      const localEdit =
+        dirty.has(id) ||
+        (engine.current?.hasPendingFor(d.path) ?? false) ||
+        (meta.loaded && getCachedDoc(id, meta.baseContent) !== meta.baseContent);
+      meta.sha = d.sha;
+      meta.loaded = false;
+      if (localEdit) {
+        notes.push(`${d.path} 本地有未提交修改，保留本地版本（提交时自动三方合并）`);
+        continue;
+      }
+      meta.baseContent = "";
+      setGhImages((m) => {
+        const url = m.get(id);
+        if (!url) return m;
+        URL.revokeObjectURL(url);
+        const next = new Map(m);
+        next.delete(id);
+        return next;
+      });
+      const isOpen = openIds.includes(id) || splitId === id;
+      if (isOpen && !IMAGE_EXTS.has(fileExt(d.path))) {
+        void (async () => {
+          try {
+            const text = await fetchBlob(tree.ref, d.sha);
+            cachePut(d.sha, text);
+            const m2 = ghMeta.current.get(id);
+            if (!m2 || m2.sha !== d.sha) return;
+            m2.baseContent = text;
+            m2.loaded = true;
+            setCachedDoc(id, text);
+            setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, content: text } : f)));
+            setGhLoadedTick((n) => n + 1);
+          } catch {
+            /* 打开时再拉 */
+          }
+        })();
+      } else {
+        setGhLoadedTick((n) => n + 1);
+      }
+    }
+    if (removedIds.length > 0) {
+      const gone = new Set(removedIds);
+      setFiles((fs) => fs.filter((f) => !gone.has(f.id)));
+      setOpenIds((ids) => ids.filter((x) => !gone.has(x)));
+      setActiveId((cur) => (gone.has(cur) ? "" : cur));
+      setSplitId((s) => (s && gone.has(s) ? null : s));
+    }
+    const entries = [...ghMeta.current.values()].map((m) => ({ path: m.path, sha: m.sha, size: 0 }));
+    setGhTree((t) => (t ? { ...t, headSha: newHead, entries } : t));
+    void saveSnapshot({ key: repoKey(tree.ref), headSha: newHead, entries, updatedAt: Date.now() });
+    if (notes.length > 0) appendConsole(notes.slice(0, 12).map((text) => ({ kind: "info" as const, text: `同步：${text}` })));
+  };
+
+  const switchBranch = useCallback(
+    async (name: string) => {
+      setBranchMenuOpen(false);
+      if (!ghTree || name === ghTree.ref.branch || branchBusy) return;
+      setBranchBusy(true);
+      appendConsole([{ kind: "info", text: `GitHub：正在切换到分支 ${name}…` }]);
+      const ok = await openGithubRepo(`${ghTree.ref.owner}/${ghTree.ref.repo}`, ghTree.ref.token ?? "", name);
+      if (ok) setGhBranchInput(name);
+      else appendConsole([{ kind: "err", text: `GitHub：切换分支 ${name} 失败` }]);
+      setBranchBusy(false);
+    },
+    [ghTree, branchBusy, openGithubRepo, appendConsole]
+  );
+
+  const toggleSplit = useCallback(() => {
+    setSplitId((s) => (s ? null : activeId || null));
+  }, [activeId]);
+ 
+  const runActiveRef = useRef(() => {});
+  const saveActiveRef = useRef(() => {});
+  runActiveRef.current = runActive;
+  saveActiveRef.current = () => {
+    if (!active) return;
+    saveFile(active.id);
+    if (ghTree && ghMeta.current.has(active.id)) {
+      const meta = ghMeta.current.get(active.id)!;
+      setCommitMsg(`Update ${meta.path}`);
+      setCommitFor(active.id);
+    }
+  };
+ 
+  const newFile = useCallback((dir?: string) => {
+    untitledCount.current += 1;
+    const id = `untitled-${untitledCount.current}`;
+    setFiles((fs) => [...fs, { id, name: "", dir, content: "" }]);
+    if (dir) setCollapsed((c) => {
+      const next = new Set(c);
+      next.delete(dir);
+      return next;
+    });
+    setRenaming({ kind: "file", id, isNew: true });
+    setRenameText("");
+  }, []);
+ 
+  const newFolder = useCallback(() => {
+    untitledCount.current += 1;
+    const id = `__newdir-${untitledCount.current}`;
+    setExtraFolders((ds) => [...ds, id]);
+    setRenaming({ kind: "folder", id, isNew: true });
+    setRenameText("");
+  }, []);
+ 
+  const startRenameFile = useCallback((f: SampleFile) => {
+    setRenaming({ kind: "file", id: f.id, isNew: false });
+    setRenameText(f.name);
+  }, []);
+ 
+  const startRenameFolder = useCallback((dir: string) => {
+    setRenaming({ kind: "folder", id: dir, isNew: false });
+    setRenameText(dir.startsWith("__newdir-") ? "" : dir);
+  }, []);
+ 
+  const deleteFile = useCallback(
+    (id: string) => {
+      setFiles((fs) => fs.filter((f) => f.id !== id));
+      closeFile(id);
+    },
+    [closeFile]
+  );
+ 
+  const deleteFolder = useCallback(
+    (dir: string) => {
+      for (const f of files) if (f.dir === dir) closeFile(f.id);
+      setFiles((fs) => fs.filter((f) => f.dir !== dir));
+      setExtraFolders((ds) => ds.filter((d) => d !== dir));
+    },
+    [files, closeFile]
+  );
+ 
+  const commitRename = useCallback(() => {
+    if (!renaming) return;
+    const name = renameText.trim();
+    if (renaming.kind === "file") {
+      if (!name) {
+        if (renaming.isNew) setFiles((fs) => fs.filter((f) => f.id !== renaming.id));
+      } else {
+        setFiles((fs) => fs.map((f) => (f.id === renaming.id ? { ...f, name } : f)));
+        if (renaming.isNew) openFile(renaming.id);
+      }
+    } else {
+      if (!name) {
+        if (renaming.isNew) setExtraFolders((ds) => ds.filter((d) => d !== renaming.id));
+      } else {
+        setFiles((fs) => fs.map((f) => (f.dir === renaming.id ? { ...f, dir: name } : f)));
+        setExtraFolders((ds) => ds.map((d) => (d === renaming.id ? name : d)));
+      }
+    }
+    setRenaming(null);
+  }, [renaming, renameText, openFile]);
+ 
+  const cancelRename = useCallback(() => {
+    if (renaming?.isNew) {
+      if (renaming.kind === "file") setFiles((fs) => fs.filter((f) => f.id !== renaming.id));
+      else setExtraFolders((ds) => ds.filter((d) => d !== renaming.id));
+    }
+    setRenaming(null);
+  }, [renaming]);
+ 
+  const collapseAll = useCallback(() => {
+    setCollapsed(new Set(dirs));
+  }, [dirs]);
+ 
+  const toggleDir = useCallback((dir: string) => {
+    setCollapsed((c) => {
+      const next = new Set(c);
+      if (next.has(dir)) next.delete(dir);
+      else next.add(dir);
+      return next;
+    });
+  }, []);
+ 
+  const commands = useMemo<Command[]>(
+    () => [
+      ...files.map((f) => ({
+        id: `open-${f.id}`,
+        label: `打开 ${f.dir ? `${f.dir}/` : ""}${f.name}`,
+        hint: f.hyper ? "1000 万行" : languageFor(f.name).label,
+        fileIcon: languageFor(f.name).icon,
+        run: () => void openFileSmart(f.id),
+      })),
+      { id: "github", label: "打开 GitHub 仓库…", icon: searchIcon, run: () => { setGhError(""); setGhStep(0); setGhOpen(true); } },
+      { id: "newfile", label: "新建文件", icon: newFileIcon, run: () => newFile() },
+      { id: "theme", label: dark ? "切换到浅色主题" : "切换到深色主题", icon: colorModeIcon, run: () => setDark((d) => !d) },
+      { id: "find", label: "文件内查找", hint: "Ctrl F", icon: searchIcon, run: () => {} },
+      { id: "gotoline", label: "跳转到行", hint: "Ctrl G", icon: arrowRightIcon, run: () => {} },
+    ],
+    [files, openFileSmart, dark, newFile]
+  );
+ 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return commands;
+    return commands.filter((c) => c.label.toLowerCase().includes(q));
+  }, [commands, query]);
+ 
+  useEffect(() => setHlIndex(0), [query, paletteOpen]);
+ 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        runActiveRef.current();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        saveActiveRef.current();
+      } else if (e.key === "Escape") {
+        setPaletteOpen(false);
+        setMenu(null);
+        setOpenMenubar(null);
+      }
+    };
+    const onDown = (e: MouseEvent) => {
+      if (paletteRef.current && !paletteRef.current.contains(e.target as Node)) setPaletteOpen(false);
+      if (!(e.target as HTMLElement).closest?.(".menubar")) setOpenMenubar(null);
+    };
+    window.addEventListener("keydown", handler);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("keydown", handler);
+      window.removeEventListener("mousedown", onDown);
+    };
+  }, []);
+ 
+  const runCommand = (c: Command) => {
+    setPaletteOpen(false);
+    setQuery("");
+    c.run();
+  };
+ 
+  const openMenu = (e: React.MouseEvent, items: CtxMenu["items"], prefer?: "above") => {
+    e.preventDefault();
+    e.stopPropagation();
+    const itemH = 28;
+    const estH = items.reduce((h, it) => h + (it.sep ? 9 : itemH), 12);
+    let y = e.clientY;
+    if (prefer === "above" && y - estH >= 8) y = y - estH - 4;
+    else if (y + estH > window.innerHeight - 8) y = Math.max(8, y - estH);
+    const x = Math.min(e.clientX, window.innerWidth - 238);
+    setMenu({ x, y, items });
+  };
+ 
+  const renameInput = (
+    <input
+      className="rename-input"
+      autoFocus
+      value={renameText}
+      onChange={(e) => setRenameText(e.target.value)}
+      onBlur={commitRename}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commitRename();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          cancelRename();
+        }
+        e.stopPropagation();
+      }}
+      onClick={(e) => e.stopPropagation()}
+      spellCheck={false}
+    />
+  );
+ 
+  const menubarMenus: Array<{ name: string; items: CtxItem[] }> = [
+    {
+      name: "File",
+      items: [
+        { label: "新建文件…", run: () => newFile() },
+        { label: "新建文件夹…", run: () => newFolder() },
+        { sep: true },
+        { label: "保存", hint: "Ctrl+S", run: () => saveActiveRef.current() },
+        { label: "全部保存", run: () => saveFile() },
+        { sep: true },
+        { label: "打开 GitHub 仓库…", run: () => { setGhError(""); setGhStep(0); setGhOpen(true); } },
+        ...(ghTree ? [{ label: `关闭仓库 ${ghTree.ref.owner}/${ghTree.ref.repo}`, run: closeGithub }] : []),
+        { sep: true },
+        { label: "自动保存", checked: autoSave, run: () => setAutoSave((v) => { if (!v) setDirty(new Set()); return !v; }) },
+        { sep: true },
+        { label: "关闭编辑器", hint: "Ctrl+W", run: () => active && closeFile(active.id) },
+      ],
+    },
+    {
+      name: "Edit",
+      items: [
+        { label: "撤销", hint: "Ctrl+Z", run: () => document.execCommand("undo") },
+        { label: "重做", hint: "Ctrl+Y", run: () => document.execCommand("redo") },
+        { sep: true },
+        { label: "剪切", hint: "Ctrl+X", run: () => document.execCommand("cut") },
+        { label: "复制", hint: "Ctrl+C", run: () => document.execCommand("copy") },
+        { label: "粘贴", hint: "Ctrl+V", run: () => navigator.clipboard.readText().then((t) => document.execCommand("insertText", false, t)) },
+      ],
+    },
+    {
+      name: "Selection",
+      items: [{ label: "全选", hint: "Ctrl+A", run: () => document.execCommand("selectAll") }],
+    },
+    {
+      name: "View",
+      items: [
+        { label: "命令面板…", hint: "Ctrl+K", run: () => setPaletteOpen(true) },
+        { label: dark ? "浅色主题" : "深色主题", run: () => setDark((d) => !d) },
+        { sep: true },
+        { label: "拆分编辑器", checked: !!splitId, run: toggleSplit },
+        { sep: true },
+        { label: "控制台面板", checked: consoleOpen, run: () => setConsoleOpen((o) => !o) },
+      ],
+    },
+    {
+      name: "Go",
+      items: [
+        { label: "跳转到定义", hint: "Ctrl+点击", run: () => {} },
+        { label: "跳转到文件…", hint: "Ctrl+K", run: () => setPaletteOpen(true) },
+      ],
+    },
+    {
+      name: "Run",
+      items: [{ label: running ? "运行中…" : "运行当前文件", hint: "Ctrl+Enter", run: runActive }],
+    },
+    {
+      name: "Terminal",
+      items: [
+        { label: "切换控制台", checked: consoleOpen, run: () => setConsoleOpen((o) => !o) },
+        { label: "清空控制台", run: () => setConsoleLines([]) },
+      ],
+    },
+    {
+      name: "Help",
+      items: [{ label: "关于 Lumen", run: () => setAboutOpen(true) }],
+    },
+  ];
+ 
+  const renderFileRow = (f: SampleFile, indent: boolean, padLeft?: number) => {
+    const isRenaming = renaming?.kind === "file" && renaming.id === f.id;
+    return (
+      <button
+        key={f.id}
+        className={`tree-item${f.id === activeId ? " active" : ""}${indent ? " indent" : ""}`}
+        style={padLeft !== undefined ? { paddingLeft: padLeft } : undefined}
+        onMouseEnter={() => ghTree && boostPreload([f.dir ? `${f.dir}/${f.name}` : f.name])}
+        draggable={!isRenaming}
+        onDragStart={(e) => {
+          dragTabId.current = f.id;
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        onDragEnd={() => {
+          dragTabId.current = null;
+          setDropZone(null);
+        }}
+        onClick={() => !isRenaming && void openFileSmart(f.id)}
+        onContextMenu={(e) =>
+          openMenu(e, [
+            { label: "打开", run: () => void openFileSmart(f.id) },
+            { sep: true },
+            { label: "重命名…", hint: "F2", run: () => startRenameFile(f) },
+            { label: "删除", hint: "Delete", danger: true, run: () => deleteFile(f.id) },
+          ])
+        }
+      >
+        <img className="ficon" src={languageFor(isRenaming ? renameText || f.name : f.name).icon} alt="" />
+        {isRenaming ? renameInput : f.name}
+        {!isRenaming && f.badge && <span className="badge">{f.badge}</span>}
+        {ghLoadingId === f.id && <span className="tree-loader"><Loader size={13} /></span>}
+      </button>
+    );
+  };
+
+  const subtreePaths = (node: DirNode, limit: number): string[] => {
+    const out: string[] = [];
+    const walk = (n: DirNode) => {
+      for (const f of n.files) {
+        if (out.length >= limit) return;
+        out.push(f.dir ? `${f.dir}/${f.name}` : f.name);
+      }
+      for (const d of n.dirs) {
+        if (out.length >= limit) return;
+        walk(d);
+      }
+    };
+    walk(node);
+    return out;
+  };
+
+  const renderGhDir = (node: DirNode, depth: number): React.ReactNode => (
+    <div key={node.path}>
+      <button
+        className="tree-item folder"
+        style={{ paddingLeft: 10 + depth * 12 }}
+        onMouseEnter={() => boostPreload(subtreePaths(node, 40))}
+        onClick={() => toggleDir(node.path)}
+      >
+        <span className={`twist${collapsed.has(node.path) ? "" : " open"}`} />
+        {node.name}
+      </button>
+      {!collapsed.has(node.path) && (
+        <>
+          {node.dirs.map((d) => renderGhDir(d, depth + 1))}
+          {node.files.map((f) => renderFileRow(f, false, 10 + (depth + 1) * 12 + 15))}
+        </>
+      )}
+    </div>
+  );
+ 
+  return (
+    <div className="shell">
+      <header className="titlebar">
+        <div className="brand" onDoubleClick={() => setAboutOpen(true)}>
+          <span className="brand-glyph" style={{ "--icon": `url("${logoGlyph}")` } as React.CSSProperties} />
+          Lumen
+        </div>
+        <nav className="menubar" onMouseLeave={() => {}}>
+          {menubarMenus.map((m) => (
+            <div key={m.name} className="menubar-wrap">
+              <button
+                className={`menubar-btn${openMenubar === m.name ? " open" : ""}`}
+                onClick={() => setOpenMenubar((cur) => (cur === m.name ? null : m.name))}
+                onMouseEnter={() => setOpenMenubar((cur) => (cur ? m.name : cur))}
+              >
+                {m.name}
+              </button>
+              {openMenubar === m.name && (
+                <div className="ctx-menu menubar-menu">
+                  {m.items.map((item, i) =>
+                    item.sep ? (
+                      <div key={`sep-${i}`} className="ctx-sep" />
+                    ) : (
+                      <button
+                        key={item.label}
+                        className={`ctx-item${item.danger ? " danger" : ""}`}
+                        onClick={() => {
+                          setOpenMenubar(null);
+                          item.run?.();
+                        }}
+                      >
+                        <span className="ctx-check">
+                        {item.checked && (
+                          <span className="cicon" style={{ "--icon": `url("${checkIcon}")` } as React.CSSProperties} />
+                        )}
+                      </span>
+                        {item.label}
+                        {item.hint && <span className="ctx-hint">{item.hint}</span>}
+                      </button>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </nav>
+        <div className="titlebar-center">
+          <button className="cmdk-btn" onClick={() => setPaletteOpen(true)}>
+            搜索文件与命令…
+            <kbd>Ctrl K</kbd>
+          </button>
+        </div>
+        <div className="titlebar-actions">
+        <button
+          className="icon-btn"
+          title="切换面板"
+          onClick={() => setConsoleOpen((o) => !o)}
+        >
+          <span className="cicon lg" style={{ "--icon": `url("${consoleOpen ? layoutPanelIcon : layoutPanelOffIcon}")` } as React.CSSProperties} />
+        </button>
+        <button
+          className="icon-btn"
+          title="切换主题"
+          onClick={() => setDark((d) => !d)}
+        >
+          {dark ? (
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+            </svg>
+          )}
+        </button>
+        </div>
+      </header>
+      <div className="workbench">
+        <aside className="sidebar">
+          <div className="explorer-section">
+            <div className="explorer-head" onClick={() => setTreeOpen((o) => !o)}>
+              <span className={`twist${treeOpen ? " open" : ""}`} />
+              <span className="explorer-title">{ghTree ? `${ghTree.ref.repo}` : "Lumen-Demo"}</span>
+              {ghTree && <span className="badge">GitHub</span>}
+              <span className="explorer-actions" onClick={(e) => e.stopPropagation()}>
+                <button className="mini-btn" title="新建文件" onClick={() => newFile()}>
+                  <span className="cicon" style={{ "--icon": `url("${newFileIcon}")` } as React.CSSProperties} />
+                </button>
+                <button className="mini-btn" title="新建文件夹" onClick={newFolder}>
+                  <span className="cicon" style={{ "--icon": `url("${newFolderIcon}")` } as React.CSSProperties} />
+                </button>
+                <button className="mini-btn" title="刷新资源管理器" onClick={() => setFiles((fs) => [...fs])}>
+                  <span className="cicon" style={{ "--icon": `url("${refreshIcon}")` } as React.CSSProperties} />
+                </button>
+                <button className="mini-btn" title="全部折叠" onClick={collapseAll}>
+                  <span className="cicon" style={{ "--icon": `url("${collapseAllIcon}")` } as React.CSSProperties} />
+                </button>
+              </span>
+            </div>
+            {treeOpen && (
+              <nav
+                className="tree"
+                onContextMenu={(e) =>
+                  openMenu(e, [
+                    { label: "新建文件…", run: () => newFile() },
+                    { label: "新建文件夹…", run: () => newFolder() },
+                  ])
+                }
+              >
+                {ghRoot ? (
+                  <>
+                    {ghRoot.dirs.map((d) => renderGhDir(d, 0))}
+                    {ghRoot.files.map((f) => renderFileRow(f, false))}
+                  </>
+                ) : (<>
+                {dirs.map((dir) => {
+                  const isRenaming = renaming?.kind === "folder" && renaming.id === dir;
+                  return (
+                    <div key={dir}>
+                      <button
+                        className="tree-item folder"
+                        onClick={() => !isRenaming && toggleDir(dir)}
+                        onContextMenu={(e) =>
+                          openMenu(e, [
+                            { label: "新建文件…", run: () => newFile(dir) },
+                            { sep: true },
+                            { label: "重命名…", hint: "F2", run: () => startRenameFolder(dir) },
+                            { label: "删除", hint: "Delete", danger: true, run: () => deleteFolder(dir) },
+                          ])
+                        }
+                      >
+                        <span className={`twist${collapsed.has(dir) ? "" : " open"}`} />
+                        {isRenaming ? renameInput : dir}
+                      </button>
+                      {!collapsed.has(dir) &&
+                        files
+                          .filter((f) => f.dir === dir)
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map((f) => renderFileRow(f, true))}
+                    </div>
+                  );
+                })}
+                {rootFiles.map((f) => renderFileRow(f, false))}
+                </>)}
+              </nav>
+            )}
+          </div>
+        </aside>
+        <main className="main">
+          <div className="editor-area">
+          <div className="editor-col" style={splitId ? { flex: `${splitRatio} 1 0` } : undefined}>
+          <div className="tabstrip">
+            {openIds
+              .map((id) => files.find((f) => f.id === id))
+              .filter((f): f is SampleFile => Boolean(f))
+              .map((f) => (
+                <div
+                  key={f.id}
+                  role="tab"
+                  className={`tab${f.id === activeId ? " active" : ""}`}
+                  draggable
+                  onDragStart={(e) => {
+                    dragTabId.current = f.id;
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragEnd={() => {
+                    dragTabId.current = null;
+                    setDropZone(null);
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const dragId = dragTabId.current;
+                    if (dragId) {
+                      if (!openIds.includes(dragId)) {
+                        setOpenIds((ids) => {
+                          const idx = ids.indexOf(f.id);
+                          const next = [...ids];
+                          next.splice(idx, 0, dragId);
+                          return next;
+                        });
+                        if (dragId === splitId) setSplitId(null);
+                        setActiveId(dragId);
+                      } else {
+                        reorderTab(dragId, f.id);
+                      }
+                    }
+                    dragTabId.current = null;
+                    setDropZone(null);
+                  }}
+                  onClick={() => setActiveId(f.id)}
+                  onAuxClick={(e) => e.button === 1 && closeFile(f.id)}
+                  onContextMenu={(e) => {
+                    const path = `${f.dir ? `${f.dir}/` : ""}${f.name}`;
+                    openMenu(e, [
+                      { label: "关闭", hint: "Ctrl+W", run: () => closeFile(f.id) },
+                      { label: "关闭其他", run: () => closeOthers(f.id) },
+                      { label: "关闭右侧", run: () => closeToRight(f.id) },
+                      { label: "全部关闭", run: () => closeAll() },
+                      { sep: true },
+                      { label: "复制路径", run: () => void navigator.clipboard.writeText(path) },
+                      { sep: true },
+                      { label: "向右拆分", run: () => setSplitId(f.id) },
+                    ]);
+                  }}
+                >
+                  <img className="ficon" src={languageFor(f.name).icon} alt="" />
+                  {f.name}
+                  {dirty.has(f.id) && <span className="dirty" />}
+                  <span
+                    className="tab-close"
+                    title="关闭"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeFile(f.id);
+                    }}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 10 10" fill="none">
+                      <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                </div>
+              ))}
+            <div className="tab-actions">
+              <button
+                className="icon-btn run-btn"
+                title={running ? "运行中…" : "运行当前文件 (Ctrl+Enter)"}
+                disabled={running}
+                onClick={runActive}
+              >
+                <span className="cicon" style={{ "--icon": `url("${playIcon}")` } as React.CSSProperties} />
+              </button>
+              <button className="icon-btn" title="拆分编辑器" onClick={toggleSplit}>
+                <span className="cicon" style={{ "--icon": `url("${splitIcon}")` } as React.CSSProperties} />
+              </button>
+              {active && fileExt(active.name) === "md" && (
+                <button
+                  className="icon-btn"
+                  title={mdPreviewIds.has(active.id) ? "返回编辑" : "Markdown 预览"}
+                  onClick={() =>
+                    setMdPreviewIds((s) => {
+                      const n = new Set(s);
+                      if (n.has(active.id)) n.delete(active.id);
+                      else n.add(active.id);
+                      return n;
+                    })
+                  }
+                >
+                  <span className="cicon" style={{ "--icon": `url("${openPreviewIcon}")` } as React.CSSProperties} />
+                </button>
+              )}
+            </div>
+          </div>
+          <div
+            className="editor-host"
+            onDragOver={(e) => {
+              if (!dragTabId.current) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              const rect = e.currentTarget.getBoundingClientRect();
+              const zone = e.clientX > rect.left + rect.width / 2 ? "main-right" : "main-full";
+              setDropZone((z) => (z === zone ? z : zone));
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setDropZone((z) => (z === "main-right" || z === "main-full" ? null : z));
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const id = dragTabId.current;
+              dragTabId.current = null;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const right = e.clientX > rect.left + rect.width / 2;
+              setDropZone(null);
+              if (!id) return;
+              if (right) {
+                if (id !== splitId) {
+                  if (openIds.length > 1 && openIds.includes(id)) closeFile(id);
+                  loadGhFile(id);
+                  setSplitId(id);
+                }
+              } else {
+                openFileSmart(id);
+                if (id === splitId) setSplitId(null);
+              }
+            }}
+            onContextMenu={(e) => {
+              if (!(e.target as HTMLElement).closest(".cm-editor")) return;
+              openMenu(e, [
+                { label: "剪切", hint: "Ctrl+X", run: () => document.execCommand("cut") },
+                { label: "复制", hint: "Ctrl+C", run: () => document.execCommand("copy") },
+                {
+                  label: "粘贴",
+                  hint: "Ctrl+V",
+                  run: () => {
+                    navigator.clipboard.readText().then((text) => {
+                      document.execCommand("insertText", false, text);
+                    });
+                  },
+                },
+                { sep: true },
+                { label: "全选", hint: "Ctrl+A", run: () => document.execCommand("selectAll") },
+                { sep: true },
+                { label: "命令面板…", hint: "Ctrl+K", run: () => setPaletteOpen(true) },
+              ]);
+            }}
+          >
+          {ghRestoring ? (
+            <div className="loading-pane"><Loader size={22} /></div>
+          ) : !active ? (
+            <div className="empty-pane" />
+          ) : ghMeta.current.has(active.id) && !ghMeta.current.get(active.id)!.loaded ? (
+            <div className="loading-pane"><Loader size={22} /></div>
+          ) : ghImages.has(active.id) ? (
+            <div className="img-view">
+              <img src={ghImages.get(active.id)} alt={active.name} />
+            </div>
+          ) : fileExt(active.name) === "md" && mdPreviewIds.has(active.id) ? (
+            <div
+              className="md-preview"
+              dangerouslySetInnerHTML={{
+                __html: DOMPurify.sanitize(marked.parse(getCachedDoc(active.id, active.content), { async: false }) as string),
+              }}
+            />
+          ) : active.hyper ? (
+            <HyperEditor dark={dark} onCursor={setCursor} />
+          ) : (
+            <Editor
+              key={active.id}
+              fileId={active.id}
+              filename={active.name}
+              initialDoc={active.content}
+              dark={dark}
+              onDocChange={onDocChange}
+              onCursor={setCursor}
+            />
+          )}
+          {dropZone === "main-right" && <div className="drop-overlay right" />}
+          {dropZone === "main-full" && <div className="drop-overlay full" />}
+          </div>
+          </div>
+          {splitId && (() => {
+            const sf = files.find((f) => f.id === splitId);
+            return (
+              <>
+              <div
+                className="split-resizer"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  const area = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                  const onMove = (ev: MouseEvent) => {
+                    const r = (ev.clientX - area.left) / area.width;
+                    setSplitRatio(Math.min(Math.max(r, 0.2), 0.8));
+                  };
+                  const onUp = () => {
+                    window.removeEventListener("mousemove", onMove);
+                    window.removeEventListener("mouseup", onUp);
+                  };
+                  window.addEventListener("mousemove", onMove);
+                  window.addEventListener("mouseup", onUp);
+                }}
+              />
+              <div
+                className="editor-host split-pane"
+                style={{ flex: `${1 - splitRatio} 1 0` }}
+                onDragOver={(e) => {
+                  if (!dragTabId.current) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setDropZone((z) => (z === "split-full" ? z : "split-full"));
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setDropZone((z) => (z === "split-full" ? null : z));
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const id = dragTabId.current;
+                  dragTabId.current = null;
+                  setDropZone(null);
+                  if (id && id !== splitId) {
+                    if (openIds.length > 1 && openIds.includes(id)) closeFile(id);
+                    loadGhFile(id);
+                    setSplitId(id);
+                  }
+                }}
+              >
+                <div className="tabstrip">
+                  {sf && (
+                    <div
+                      role="tab"
+                      className="tab active"
+                      draggable
+                      onDragStart={(e) => {
+                        dragTabId.current = sf.id;
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      onDragEnd={() => {
+                        dragTabId.current = null;
+                        setDropZone(null);
+                      }}
+                      onClick={() => setActiveId(sf.id)}
+                    >
+                      <img className="ficon" src={languageFor(sf.name).icon} alt="" />
+                      {sf.name}
+                      {dirty.has(sf.id) && <span className="dirty" />}
+                      <span
+                        className="tab-close"
+                        title="关闭"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSplitId(null);
+                        }}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 10 10" fill="none">
+                          <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                        </svg>
+                      </span>
+                    </div>
+                  )}
+                </div>
+                {!sf ? (
+                  <div className="empty-pane" />
+                ) : ghMeta.current.has(sf.id) && !ghMeta.current.get(sf.id)!.loaded ? (
+                  <div className="loading-pane"><Loader size={22} /></div>
+                ) : ghImages.has(sf.id) ? (
+                  <div className="img-view">
+                    <img src={ghImages.get(sf.id)} alt={sf.name} />
+                  </div>
+                ) : sf.hyper ? (
+                  <HyperEditor dark={dark} onCursor={setCursor} />
+                ) : (
+                  <Editor
+                    key={`split-${sf.id}`}
+                    fileId={sf.id}
+                    filename={sf.name}
+                    initialDoc={sf.content}
+                    dark={dark}
+                    onDocChange={onDocChange}
+                    onCursor={setCursor}
+                  />
+                )}
+                {dropZone === "split-full" && <div className="drop-overlay full" />}
+              </div>
+              </>
+            );
+          })()}
+          </div>
+ 
+          {consoleOpen && (
+            <div className="console-panel" style={{ height: consoleHeight }}>
+              <div
+                className="console-resizer"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  const startY = e.clientY;
+                  const startH = consoleHeight;
+                  const onMove = (ev: MouseEvent) => {
+                    const h = startH + (startY - ev.clientY);
+                    setConsoleHeight(Math.min(Math.max(h, 80), window.innerHeight - 160));
+                  };
+                  const onUp = () => {
+                    window.removeEventListener("mousemove", onMove);
+                    window.removeEventListener("mouseup", onUp);
+                  };
+                  window.addEventListener("mousemove", onMove);
+                  window.addEventListener("mouseup", onUp);
+                }}
+              />
+              <div className="console-head">
+                {([
+                  ["problems", "问题"],
+                  ["output", "输出"],
+                  ["debug", "调试控制台"],
+                  ["terminal", "终端"],
+                  ["ports", "端口"],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    className={`console-tab${consoleTab === id ? " active" : ""}`}
+                    onClick={() => setConsoleTab(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <span className="console-actions">
+                  <button className="icon-btn sm" title="新建终端" onClick={() => setConsoleTab("terminal")}>
+                    <span className="cicon" style={{ "--icon": `url("${addIcon}")` } as React.CSSProperties} />
+                  </button>
+                  <button className="icon-btn sm" title="清空终端" onClick={() => setConsoleLines([])}>
+                    <span className="cicon" style={{ "--icon": `url("${trashIcon}")` } as React.CSSProperties} />
+                  </button>
+                  <button className="icon-btn sm" title="更多操作">
+                    <span className="cicon" style={{ "--icon": `url("${ellipsisIcon}")` } as React.CSSProperties} />
+                  </button>
+                  <button className="icon-btn sm" title="关闭面板" onClick={() => setConsoleOpen(false)}>
+                    <span className="cicon" style={{ "--icon": `url("${closeIcon}")` } as React.CSSProperties} />
+                  </button>
+                </span>
+              </div>
+              <div className="console-main">
+                <div className="console-body">
+                  {consoleTab === "problems" ? (
+                    <div className="console-empty">目前尚未在工作区检测到问题。</div>
+                  ) : consoleTab === "output" ? (
+                    <div className="console-empty">没有要显示的输出。</div>
+                  ) : consoleTab === "debug" ? (
+                    <div className="console-empty">尚未启动调试会话。</div>
+                  ) : consoleTab === "ports" ? (
+                    <div className="console-empty">尚未转发任何端口。</div>
+                  ) : (
+                    <>
+                      {consoleLines.map((l, i) =>
+                        l.kind === "cmd" ? (
+                          <pre key={i} className="console-line cmd">
+                            <span
+                              className={`cmd-dot${l.ok === false ? " fail" : l.ok ? " ok" : ""}`}
+                              onClick={(e) => {
+                                const outLines: string[] = [];
+                                for (let j = i + 1; j < consoleLines.length && consoleLines[j].kind !== "cmd"; j++) {
+                                  outLines.push(consoleLines[j].text);
+                                }
+                                const output = outLines.join("\n");
+                                openMenu(e, [
+                                  { label: "重新运行命令", run: () => void runActive() },
+                                  { sep: true },
+                                  { label: "复制命令", run: () => void navigator.clipboard.writeText(l.text) },
+                                  { label: "复制命令和输出", run: () => void navigator.clipboard.writeText(`${l.text}\n${output}`) },
+                                  { label: "复制输出", run: () => void navigator.clipboard.writeText(output) },
+                                ], "above");
+                              }}
+                            />
+                            <span className="console-prompt">wandbox:~$</span> {l.text}
+                          </pre>
+                        ) : (
+                          <pre key={i} className={`console-line ${l.kind}`}>{l.text}</pre>
+                        )
+                      )}
+                      {running && (
+                        <pre className="console-line info run-wait">
+                          <Loader size={13} />
+                          <span>Running…</span>
+                        </pre>
+                      )}
+                      {!running && (
+                        <pre className="console-line cmd">
+                          <span className="console-prompt">wandbox:~$</span> <span className="console-block-caret" />
+                        </pre>
+                      )}
+                      <div ref={consoleEndRef} />
+                    </>
+                  )}
+                </div>
+                {consoleTab === "terminal" && (
+                  <div className="console-sessions">
+                    <div className="console-session active">
+                      <span className="cicon" style={{ "--icon": `url("${pwshIcon}")` } as React.CSSProperties} />
+                      pwsh
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+ 
+        </main>
+      </div>
+ 
+      <footer className="statusbar">
+        {ghTree ? (
+          <>
+            <button
+              className={`status-item status-btn branch-btn${branchMenuOpen ? " open" : ""}`}
+              title="切换分支"
+              onClick={() => setBranchMenuOpen((v) => !v)}
+            >
+              {branchBusy ? <Loader size={11} /> : <span className="branch-glyph">⎇</span>}
+              {ghTree.ref.owner}/{ghTree.ref.repo} · {ghTree.ref.branch}
+            </button>
+            <span className="status-item sync-item" title="GitHub 超级同步引擎">
+              {syncStatus.state === "syncing" ? (
+                <>
+                  <Loader size={11} /> 同步中…
+                </>
+              ) : syncStatus.state === "pending" ? (
+                `⇡ ${syncStatus.pending} 待提交`
+              ) : syncStatus.state === "offline" ? (
+                `离线${syncStatus.pending > 0 ? ` · ${syncStatus.pending} 个事务待重放` : ""}`
+              ) : (
+                `已同步 ${ghTree.headSha.slice(0, 7)}`
+              )}
+            </span>
+          </>
+        ) : (
+          <span className="status-item">main</span>
+        )}
+        <span className="status-spacer" />
+        {active?.hyper ? (
+          <>
+            <span className="status-item">行 {cursor.line.toLocaleString()}，列 {cursor.col}</span>
+            <span className="status-item">{HYPER_COUNT.toLocaleString()} 行</span>
+            <span className="status-item">Spaces: 4</span>
+            <span className="status-item">UTF-8</span>
+            <span className="status-item">C#</span>
+          </>
+        ) : active ? (
+          <>
+            <span className="status-item">行 {cursor.line}，列 {cursor.col}</span>
+            <span className="status-item">Spaces: 4</span>
+            <span className="status-item">UTF-8</span>
+            <span className="status-item">{languageFor(active.name).label}</span>
+          </>
+        ) : null}
+      </footer>
+ 
+      {branchMenuOpen && ghTree && (
+        <div className="ctx-overlay" onMouseDown={() => setBranchMenuOpen(false)}>
+          <div className="branch-menu" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="branch-menu-title">切换分支 — {ghTree.ref.owner}/{ghTree.ref.repo}</div>
+            <div className="branch-menu-list">
+              {branches === null ? (
+                <div className="branch-menu-empty">
+                  <Loader size={14} /> 正在加载分支列表…
+                </div>
+              ) : branches.length === 0 ? (
+                <div className="branch-menu-empty">没有找到分支</div>
+              ) : (
+                branches.map((b) => (
+                  <button
+                    key={b.name}
+                    className={`branch-menu-item${b.name === ghTree.ref.branch ? " active" : ""}`}
+                    onClick={() => void switchBranch(b.name)}
+                  >
+                    <span className="branch-glyph">⎇</span>
+                    <span className="branch-name">{b.name}</span>
+                    <span className="branch-sha">{b.sha.slice(0, 7)}</span>
+                    {b.name === ghTree.ref.branch && <img className="branch-check" src={checkIcon} alt="" />}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {menu && (
+        <div className="ctx-overlay" onMouseDown={() => setMenu(null)} onContextMenu={(e) => e.preventDefault()}>
+          <div
+            className="ctx-menu"
+            style={{ left: menu.x, top: menu.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {menu.items.map((item, i) =>
+              item.sep ? (
+                <div key={`sep-${i}`} className="ctx-sep" />
+              ) : (
+                <button
+                  key={item.label}
+                  className={`ctx-item${item.danger ? " danger" : ""}`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setMenu(null);
+                    item.run?.();
+                  }}
+                >
+                  {item.label}
+                  {item.hint && <span className="ctx-hint">{item.hint}</span>}
+                </button>
+              )
+            )}
+          </div>
+        </div>
+      )}
+      {paletteOpen && (
+        <div
+          ref={paletteRef}
+          className="palette"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setHlIndex((i) => Math.min(i + 1, filtered.length - 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setHlIndex((i) => Math.max(i - 1, 0));
+            } else if (e.key === "Enter" && filtered[hlIndex]) {
+              runCommand(filtered[hlIndex]);
+            }
+          }}
+        >
+          <input
+            className="palette-input"
+            placeholder="输入命令或文件名…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            autoFocus
+          />
+          <div className="palette-list">
+            {filtered.length === 0 && <div className="palette-empty">没有匹配的命令</div>}
+            {filtered.map((c, i) => (
+              <button
+                key={c.id}
+                className={`palette-item${i === hlIndex ? " hl" : ""}`}
+                onMouseEnter={() => setHlIndex(i)}
+                onClick={() => runCommand(c)}
+              >
+                {c.fileIcon ? (
+                  <img className="ficon" src={c.fileIcon} alt="" />
+                ) : (
+                  <span className="cicon" style={{ "--icon": `url("${c.icon}")` } as React.CSSProperties} />
+                )}
+                {c.label}
+                {c.hint && <span className="hint">{c.hint}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {aboutOpen && (
+        <div className={`about-overlay${aboutClosing ? " closing" : ""}`} onMouseDown={closeAbout}>
+          <div className="about-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="about-main">
+              <span className="about-logo" style={{ "--icon": `url("${logoGlyph}")` } as React.CSSProperties} />
+              <div className="about-name">Lumen</div>
+              <div className="about-sub">Code Editor</div>
+              <div className="about-ver">版本 1.0.0</div>
+            </div>
+            <div className="about-quote">
+              <p>"Programs must be written for people to read, and only incidentally for machines to execute."</p>
+              <span className="about-quote-by">— Harold Abelson</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {ghOpen && (() => {
+        const steps = [
+          { title: "打开 GitHub 仓库", placeholder: "owner/repo 或 https://github.com/owner/repo", value: ghRepoInput, set: setGhRepoInput, password: false },
+          { title: "访问令牌", placeholder: "ghp_…（公开仓库可留空，Enter 跳过）", value: ghTokenInput, set: setGhTokenInput, password: true },
+          { title: "分支", placeholder: "留空使用默认分支（Enter 打开）", value: ghBranchInput, set: setGhBranchInput, password: false },
+        ] as const;
+        const s = steps[ghStep];
+        const next = () => {
+          if (ghBusy) return;
+          setGhError("");
+          if (ghStep === 0 && !parseRepoInput(ghRepoInput)) {
+            setGhError("无法识别仓库地址，支持 owner/repo 或完整 GitHub URL");
+            return;
+          }
+          if (ghStep < 2) setGhStep(ghStep + 1);
+          else void connectGithub();
+        };
+        const back = () => {
+          if (ghBusy) return;
+          setGhError("");
+          if (ghStep > 0) setGhStep(ghStep - 1);
+          else setGhOpen(false);
+        };
+        return (
+          <div className="ghq-overlay" onMouseDown={() => !ghBusy && setGhOpen(false)}>
+            <div className="ghq" onMouseDown={(e) => e.stopPropagation()}>
+              <div className="ghq-titlebar">
+                <span className="ghq-titletext">{s.title}（{ghStep + 1}/3）</span>
+              </div>
+              <input
+                key={ghStep}
+                className="palette-input"
+                type={s.password ? "password" : "text"}
+                placeholder={s.placeholder}
+                value={s.value}
+                onChange={(e) => s.set(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") next();
+                  else if (e.key === "Escape") { e.stopPropagation(); back(); }
+                }}
+                autoFocus
+                spellCheck={false}
+                disabled={ghBusy}
+              />
+              <div className="ghq-list">
+                {ghError ? (
+                  <div className="ghq-error">{ghError}</div>
+                ) : ghBusy ? (
+                  <div className="palette-item hl ghq-action"><Loader size={14} />正在打开 {ghRepoInput}…</div>
+                ) : (
+                  <button className="palette-item hl ghq-action" onClick={next}>
+                    {ghStep === 0 ? "继续" : ghStep === 1 ? (ghTokenInput ? "使用此令牌继续" : "跳过（公开仓库）") : `打开 ${ghRepoInput}`}
+                    <span className="hint">Enter</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {commitFor && ghTree && (
+        <div className="gh-overlay" onMouseDown={() => { if (!commitBusy) { setCommitFor(null); setCommitError(""); } }}>
+          <div className="gh-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="gh-title">提交到 GitHub</div>
+            <div className="gh-sub">{ghTree.ref.owner}/{ghTree.ref.repo} · {ghTree.ref.branch} · {ghMeta.current.get(commitFor)?.path}</div>
+            <label className="gh-label">提交信息</label>
+            <input
+              className="gh-input"
+              value={commitMsg}
+              onChange={(e) => setCommitMsg(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void doCommit()}
+              autoFocus
+              spellCheck={false}
+            />
+            {commitError && <div className="gh-error">{commitError}</div>}
+            <div className="gh-actions">
+              <button className="gh-btn" disabled={commitBusy} onClick={() => setCommitFor(null)}>仅本地保存</button>
+              <button className="gh-btn primary" disabled={commitBusy} onClick={() => void doCommit()}>
+                {commitBusy ? "提交中…" : "提交"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
