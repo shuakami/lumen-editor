@@ -628,9 +628,20 @@ export default function App() {
         onTransactionDone: (tx, r) => {
           const id = `gh:${tx.path}`;
           const meta = ghMeta.current.get(id);
+          const committed = r.committedContent ?? tx.content;
           if (meta) {
             if (r.newSha) meta.sha = r.newSha;
-            meta.baseContent = tx.content;
+            meta.baseContent = committed;
+          }
+          // 三方合并改变了内容：把合并结果回写到编辑器（若用户提交后又输入了新内容则不覆盖）
+          if (r.committedContent !== undefined) {
+            const current = getCachedDoc(id, tx.content);
+            if (current === tx.content) {
+              setCachedDoc(id, committed);
+              setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, content: committed } : f)));
+            } else {
+              appendLog([{ kind: "info", text: `GitHub：${tx.path} 合并结果与编辑器当前内容不同（提交后有新输入），远端为合并版，编辑器保留本地` }]);
+            }
           }
           void deleteDraft(draftKey(repoKey(tree.ref), tx.path));
           setDirty((d) => {
@@ -2396,25 +2407,41 @@ export default function App() {
         );
       })()}
       {commitFor && ghTree && (
-        <div className="gh-overlay" onMouseDown={() => { if (!commitBusy) { setCommitFor(null); setCommitError(""); } }}>
-          <div className="gh-modal" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="gh-title">提交到 GitHub</div>
-            <div className="gh-sub">{ghTree.ref.owner}/{ghTree.ref.repo} · {ghTree.ref.branch} · {ghMeta.current.get(commitFor)?.path}</div>
-            <label className="gh-label">提交信息</label>
+        <div className="ghq-overlay" onMouseDown={() => { if (!commitBusy) { setCommitFor(null); setCommitError(""); } }}>
+          <div className="ghq" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="ghq-titlebar">
+              <span className="ghq-titletext">提交到 {ghTree.ref.owner}/{ghTree.ref.repo}@{ghTree.ref.branch} · {ghMeta.current.get(commitFor)?.path}</span>
+            </div>
             <input
-              className="gh-input"
+              className="palette-input"
+              placeholder={`提交信息（留空使用 Update ${ghMeta.current.get(commitFor)?.path ?? ""}）`}
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void doCommit()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void doCommit();
+                else if (e.key === "Escape") { e.stopPropagation(); if (!commitBusy) { setCommitFor(null); setCommitError(""); } }
+              }}
               autoFocus
               spellCheck={false}
+              disabled={commitBusy}
             />
-            {commitError && <div className="gh-error">{commitError}</div>}
-            <div className="gh-actions">
-              <button className="gh-btn" disabled={commitBusy} onClick={() => setCommitFor(null)}>仅本地保存</button>
-              <button className="gh-btn primary" disabled={commitBusy} onClick={() => void doCommit()}>
-                {commitBusy ? "提交中…" : "提交"}
-              </button>
+            <div className="ghq-list">
+              {commitError ? (
+                <div className="ghq-error">{commitError}</div>
+              ) : commitBusy ? (
+                <div className="palette-item hl ghq-action"><Loader size={14} />提交中…</div>
+              ) : (
+                <>
+                  <button className="palette-item hl ghq-action" onClick={() => void doCommit()}>
+                    提交并推送
+                    <span className="hint">Enter</span>
+                  </button>
+                  <button className="palette-item ghq-action" onClick={() => setCommitFor(null)}>
+                    仅本地保存
+                    <span className="hint">Esc</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

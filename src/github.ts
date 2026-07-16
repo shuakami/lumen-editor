@@ -166,6 +166,8 @@ export interface CommitResult {
   ok: boolean;
   newSha?: string;
   merged?: boolean;
+  /** 三方合并后实际提交到远端的内容（与本地发送内容不同时存在） */
+  committedContent?: string;
   message: string;
 }
 
@@ -255,6 +257,7 @@ export async function commitFile(
     ok: true,
     newSha: r.content.sha,
     merged: true,
+    committedContent: text !== content ? text : undefined,
     message: clean ? "远端有更新，已自动合并后提交" : "远端有更新，存在冲突行（以本地为准）已提交",
   };
 }

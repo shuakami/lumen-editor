@@ -31,12 +31,20 @@ export function getCachedDoc(fileId: string, fallback: string): string {
   return docCache.get(fileId) ?? fallback;
 }
  
-/** 同步引擎热更新打开中的文件时刷新文档缓存。 */
+const viewRegistry = new Map<string, EditorView>();
+
+/** 同步引擎热更新打开中的文件：刷新文档缓存，并把新内容应用到已挂载的编辑器视图。 */
 export function setCachedDoc(fileId: string, doc: string): void {
   docCache.set(fileId, doc);
+  for (const [key, view] of viewRegistry) {
+    if (key !== fileId || view.state.doc.toString() === doc) continue;
+    const pos = Math.min(view.state.selection.main.head, doc.length);
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: doc },
+      selection: { anchor: pos },
+    });
+  }
 }
-
-const viewRegistry = new Map<string, EditorView>();
 
 /** 跳转到指定文件的某一行（编辑器未挂载时自动重试）。 */
 export function revealLine(fileId: string, line: number, col = 0, attempts = 20): void {
