@@ -103,6 +103,20 @@ interface DirNode {
 }
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "ico", "webp", "bmp", "avif"]);
+/** 无法作为文本编辑的二进制文件：编辑器区显示占位 + 下载按钮 */
+const BINARY_EXTS = new Set([
+  "exe", "dll", "so", "dylib", "bin", "o", "a", "lib", "obj", "class", "wasm", "pdb",
+  "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "apk", "ipa", "deb", "rpm", "dmg", "iso", "msi",
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+  "mp3", "mp4", "wav", "ogg", "flac", "avi", "mov", "mkv", "webm",
+  "ttf", "otf", "woff", "woff2", "eot",
+  "db", "sqlite", "sqlite3", "dat", "pak", "psd", "blend",
+]);
+function fmtSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
 const IMAGE_MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
   ico: "image/x-icon", webp: "image/webp", bmp: "image/bmp", avif: "image/avif",
@@ -183,6 +197,7 @@ export default function App() {
   const [mdPreviewIds, setMdPreviewIds] = useState<Set<string>>(new Set());
   const preloader = useRef<Preloader | null>(null);
   const [ghImages, setGhImages] = useState<Map<string, string>>(new Map());
+  const [ghBins, setGhBins] = useState<Map<string, { url: string; size: number }>>(new Map());
   const [commitFor, setCommitFor] = useState<string | null>(null);
   const [commitMsg, setCommitMsg] = useState("");
   const [commitBusy, setCommitBusy] = useState(false);
@@ -281,6 +296,17 @@ export default function App() {
             const bytes = b64ToBytes(b64);
             const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: IMAGE_MIME[ext] }));
             setGhImages((m) => new Map(m).set(id, url));
+            meta.loaded = true;
+            setGhLoadedTick((n) => n + 1);
+          } else if (BINARY_EXTS.has(ext)) {
+            let b64 = await cacheGet(meta.sha);
+            if (b64 === null) {
+              b64 = await fetchBlobB64(tree.ref, meta.sha);
+              cachePut(meta.sha, b64);
+            }
+            const bytes = b64ToBytes(b64);
+            const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: "application/octet-stream" }));
+            setGhBins((m) => new Map(m).set(id, { url, size: bytes.length }));
             meta.loaded = true;
             setGhLoadedTick((n) => n + 1);
           } else {
@@ -470,7 +496,7 @@ export default function App() {
     const needle = q.toLowerCase();
     const hits: SearchHit[] = [];
     for (const f of files) {
-      if (f.hyper || IMAGE_EXTS.has(fileExt(f.name))) continue;
+      if (f.hyper || IMAGE_EXTS.has(fileExt(f.name)) || BINARY_EXTS.has(fileExt(f.name))) continue;
       const meta = ghMeta.current.get(f.id);
       const content = getCachedDoc(f.id, meta ? meta.baseContent : f.content);
       if (!content) continue;
@@ -714,6 +740,10 @@ export default function App() {
         for (const url of m.values()) URL.revokeObjectURL(url);
         return new Map();
       });
+      setGhBins((m) => {
+        for (const b of m.values()) URL.revokeObjectURL(b.url);
+        return new Map();
+      });
       setCollapsed(new Set(fs.flatMap((f) => (f.dir ? ancestorDirs(f.dir) : []))));
       setGhOpen(false);
       appendLog([{ kind: "info", text: `GitHub：已打开 ${tree.ref.owner}/${tree.ref.repo}@${tree.ref.branch}（${fs.length} 个文件）` }]);
@@ -726,7 +756,7 @@ export default function App() {
       const token = tree.ref.token;
       preloader.current?.stop();
       const candidates: PreloadTarget[] = tree.entries.filter(
-        (e2) => !IMAGE_EXTS.has(fileExt(e2.path)) && e2.size <= 300 * 1024
+        (e2) => !IMAGE_EXTS.has(fileExt(e2.path)) && !BINARY_EXTS.has(fileExt(e2.path)) && e2.size <= 300 * 1024
       );
       const cached = await cacheGetMany(candidates.map((c) => c.sha));
       let hits = 0;
@@ -893,6 +923,10 @@ export default function App() {
       for (const url of m.values()) URL.revokeObjectURL(url);
       return new Map();
     });
+    setGhBins((m) => {
+      for (const b of m.values()) URL.revokeObjectURL(b.url);
+      return new Map();
+    });
     setGhTree(null);
     setFiles(SAMPLE_FILES);
     setOpenIds([]);
@@ -980,8 +1014,16 @@ export default function App() {
         next.delete(id);
         return next;
       });
+      setGhBins((m) => {
+        const b = m.get(id);
+        if (!b) return m;
+        URL.revokeObjectURL(b.url);
+        const next = new Map(m);
+        next.delete(id);
+        return next;
+      });
       const isOpen = openIds.includes(id) || splitId === id;
-      if (isOpen && !IMAGE_EXTS.has(fileExt(d.path))) {
+      if (isOpen && !IMAGE_EXTS.has(fileExt(d.path)) && !BINARY_EXTS.has(fileExt(d.path))) {
         void (async () => {
           try {
             const text = await fetchBlob(tree.ref, d.sha);
@@ -1762,6 +1804,13 @@ export default function App() {
             <div className="img-view">
               <img src={ghImages.get(active.id)} alt={active.name} />
             </div>
+          ) : ghBins.has(active.id) ? (
+            <div className="bin-view">
+              <img className="bin-icon" src={languageFor(active.name).icon} alt="" />
+              <div className="bin-name">{active.name}</div>
+              <div className="bin-size">二进制文件 · {fmtSize(ghBins.get(active.id)!.size)}</div>
+              <a className="bin-download" href={ghBins.get(active.id)!.url} download={active.name}>下载</a>
+            </div>
           ) : fileExt(active.name) === "md" && mdPreviewIds.has(active.id) ? (
             <div
               className="md-preview"
@@ -1887,6 +1936,13 @@ export default function App() {
                 ) : ghImages.has(sf.id) ? (
                   <div className="img-view">
                     <img src={ghImages.get(sf.id)} alt={sf.name} />
+                  </div>
+                ) : ghBins.has(sf.id) ? (
+                  <div className="bin-view">
+                    <img className="bin-icon" src={languageFor(sf.name).icon} alt="" />
+                    <div className="bin-name">{sf.name}</div>
+                    <div className="bin-size">二进制文件 · {fmtSize(ghBins.get(sf.id)!.size)}</div>
+                    <a className="bin-download" href={ghBins.get(sf.id)!.url} download={sf.name}>下载</a>
                   </div>
                 ) : sf.hyper ? (
                   <HyperEditor dark={dark} onCursor={setCursor} />

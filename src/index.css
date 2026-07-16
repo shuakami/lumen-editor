@@ -377,6 +377,19 @@ html[data-theme="dark"] .tree::-webkit-scrollbar-thumb:hover { background: rgba(
     0 0 / 16px 16px;
   border-radius: 4px;
 }
+.bin-view {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px;
+  background: var(--bg); padding: 24px;
+}
+.bin-icon { width: 40px; height: 40px; opacity: 0.85; margin-bottom: 4px; }
+.bin-name { font-size: 14px; font-weight: 600; color: var(--fg); }
+.bin-size { font-size: 12px; color: var(--fg-3, var(--fg)); opacity: 0.7; }
+.bin-download {
+  margin-top: 12px; padding: 5px 18px; font-size: 12.5px; text-decoration: none;
+  color: #fff; background: var(--accent, #3574f0); border-radius: 5px;
+}
+.bin-download:hover { filter: brightness(1.08); }
 .tree-item.folder { font-weight: 500; color: var(--fg); padding: 4px 6px; gap: 4px; }
 .tree-item.indent { padding-left: 26px; }
 .rename-input {
