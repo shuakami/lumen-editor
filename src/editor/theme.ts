@@ -21,17 +21,23 @@ function chrome(colors: {
   selMatch: string;
   searchMatch: string;
   searchMatchSel: string;
+  ui: Record<string, string>;
   dark: boolean;
 }) {
   return EditorView.theme(
     {
-      "&": { backgroundColor: colors.bg, color: colors.fg, fontSize: "var(--code-size)" },
+      "&": {
+        backgroundColor: colors.bg,
+        color: colors.fg,
+        fontSize: "var(--code-size, 13.5px)",
+        ...colors.ui,
+      },
       ".cm-content": {
         fontFamily: '"Maple Mono NF CN", "Maple Mono", "JetBrains Mono", ui-monospace, monospace',
         fontVariantLigatures: "normal",
         caretColor: colors.caret,
         padding: "14px 0",
-        lineHeight: "var(--code-lh)",
+        lineHeight: "var(--code-lh, 1.6)",
       },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: colors.caret, borderLeftWidth: "1.5px" },
       "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground":
@@ -42,7 +48,7 @@ function chrome(colors: {
         color: colors.gutter,
         border: "none",
         fontFamily: '"Maple Mono NF CN", "Maple Mono", "JetBrains Mono", ui-monospace, monospace',
-        fontSize: "calc(var(--code-size) - 1.5px)",
+        fontSize: "calc(var(--code-size, 13.5px) - 1.5px)",
         paddingLeft: "10px",
       },
       ".cm-activeLineGutter": { backgroundColor: "transparent", color: colors.gutterActive },
@@ -87,6 +93,31 @@ const darkChrome = chrome({
   selMatch: "#404040cc",
   searchMatch: "#88c0d044",
   searchMatchSel: "#88c0d066",
+  ui: {
+    "--lumen-caret": "#f0f0f0",
+    "--lumen-fg": "#f0f0f0",
+    "--lumen-fg-2": "#f0f0f0bd",
+    "--lumen-fg-3": "#f0f0f05c",
+    "--lumen-surface": "#141414",
+    "--lumen-surface-2": "#f0f0f011",
+    "--lumen-surface-3": "#f0f0f01e",
+    "--lumen-accent": "#f0f0f0",
+    "--lumen-focus": "#f0f0f026",
+    "--lumen-sym-method": "#efb080",
+    "--lumen-sym-class": "#87c3ff",
+    "--lumen-sym-keyword": "#82d2ce",
+    "--lumen-sym-text": "#f0f0f099",
+    "--lumen-fncall-c": "#ebc88d",
+    "--lumen-fndef-c": "#f0f0f0",
+    "--lumen-assign-c": "#82d2ce",
+    "--lumen-strfmt-c": "#ebc88d",
+    "--lumen-syslib-c": "#e394dc",
+    "--lumen-scroll-thumb": "rgba(160, 160, 160, 0.25)",
+    "--lumen-scroll-thumb-hover": "rgba(160, 160, 160, 0.4)",
+    "--lumen-scroll-thumb-active": "rgba(160, 160, 160, 0.5)",
+    "--lumen-shadow-pop":
+      "0 0 0 1px rgba(240, 240, 240, 0.09), 0 2px 6px rgba(0, 0, 0, 0.25), 0 16px 48px rgba(0, 0, 0, 0.4)",
+  },
   dark: true,
 });
  
@@ -103,6 +134,31 @@ const lightChrome = chrome({
   selMatch: "#14141411",
   searchMatch: "#6f9ba62e",
   searchMatchSel: "#6f9ba65c",
+  ui: {
+    "--lumen-caret": "#141414",
+    "--lumen-fg": "#141414",
+    "--lumen-fg-2": "#141414bd",
+    "--lumen-fg-3": "#1414145c",
+    "--lumen-surface": "#fcfcfc",
+    "--lumen-surface-2": "#14141411",
+    "--lumen-surface-3": "#1414141e",
+    "--lumen-accent": "#141414",
+    "--lumen-focus": "#14141426",
+    "--lumen-sym-method": "#db704b",
+    "--lumen-sym-class": "#206595",
+    "--lumen-sym-keyword": "#b3003f",
+    "--lumen-sym-text": "#14141499",
+    "--lumen-fncall-c": "#db704b",
+    "--lumen-fndef-c": "#db704b",
+    "--lumen-assign-c": "#141414",
+    "--lumen-strfmt-c": "#b3003f",
+    "--lumen-syslib-c": "#9e94d5",
+    "--lumen-scroll-thumb": "rgba(100, 100, 100, 0.28)",
+    "--lumen-scroll-thumb-hover": "rgba(100, 100, 100, 0.45)",
+    "--lumen-scroll-thumb-active": "rgba(90, 90, 90, 0.6)",
+    "--lumen-shadow-pop":
+      "0 0 0 1px rgba(20, 20, 20, 0.07), 0 2px 6px rgba(20, 20, 20, 0.04), 0 16px 48px rgba(20, 20, 20, 0.08)",
+  },
   dark: false,
 });
  

@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef } from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorState, Compartment, StateEffect, type Extension } from "@codemirror/state";
+import { ensureEditorCss } from "./editor/injectcss";
 import {
   keymap,
   lineNumbers,
@@ -140,6 +141,7 @@ export const HyperEditor = memo(function HyperEditor({ dark, onCursor }: HyperEd
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    ensureEditorCss();
  
     let firstChunk = 0;
     /** Doc offsets where each window chunk starts (length WINDOW_CHUNKS). */

@@ -8,6 +8,7 @@ import { indentUnit } from "@codemirror/language";
 import { languageFor } from "./editor/languages";
 import { editorTheme } from "./editor/theme";
 import { openSearchPanel, gotoLine } from "@codemirror/search";
+import { ensureEditorCss } from "./editor/injectcss";
  
 export interface CursorInfo {
   line: number;
@@ -93,6 +94,7 @@ export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark,
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    ensureEditorCss();
     const doc = docCache.get(fileId) ?? initialDoc;
     let pendingDoc: Text | null = null;
     let docFrame = 0;
