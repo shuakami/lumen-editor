@@ -6,7 +6,7 @@ import { languageFor } from "./editor/languages";
 import { applyCodeScale } from "./editor/scale";
 import { isRunnable, runCode, runCommandLabel } from "./editor/run";
 import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, listCommits, fetchFileAtCommit, searchCode, type GhTree, type GhBranch, type GhFileDelta, type GhCodeHit, type GhCommit } from "./github";
-import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, type SyncState } from "./syncengine";
+import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, recordLocalVersion, loadLocalHistory, type LocalVersion, type SyncState } from "./syncengine";
 import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
 import { Preloader, type PreloadTarget } from "./preload";
 import { brainScore, brainRecordOpen, brainStats, brainSuccessors } from "./preload-brain";
@@ -250,8 +250,10 @@ export default function App() {
   const [historyEnd, setHistoryEnd] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyPreview, setHistoryPreview] = useState<null | { sha: string; content: string | null }>(null);
+  const [historyLocal, setHistoryLocal] = useState<LocalVersion[] | null>(null);
   const historyCache = useRef(new Map<string, { list: GhCommit[]; end: boolean }>());
   const historyBlobCache = useRef(new Map<string, string>());
+  const localSnapAt = useRef(new Map<string, number>());
   const handleDeltasRef = useRef<(deltas: GhFileDelta[], newHead: string) => void>(() => {});
   const untitledCount = useRef(0);
   const autoSaveRef = useRef(autoSave);
@@ -473,7 +475,15 @@ export default function App() {
         const content = getCachedDoc(fileId, m.baseContent);
         const key = draftKey(repo, m.path);
         if (m.loaded && content === m.baseContent) void deleteDraft(key);
-        else void saveDraft({ key, repoKey: repo, path: m.path, content, savedAt: Date.now() });
+        else {
+          void saveDraft({ key, repoKey: repo, path: m.path, content, savedAt: Date.now() });
+          // 本地编辑历史：每个文件最多每 30s 留存一份版本快照
+          const now = Date.now();
+          if (now - (localSnapAt.current.get(m.path) ?? 0) >= 30_000) {
+            localSnapAt.current.set(m.path, now);
+            void recordLocalVersion(repo, m.path, content, "save");
+          }
+        }
       }, 350)
     );
   }, []);
@@ -498,6 +508,7 @@ export default function App() {
         if (!m || !m.loaded || !e) return;
         const content = getCachedDoc(fileId, m.baseContent);
         if (content === m.baseContent) return;
+        void recordLocalVersion(repoKey(ghTreeRef.current!.ref), m.path, content, "commit", `Update ${m.path}`);
         void e.enqueue({
           path: m.path,
           baseSha: m.sha,
@@ -1046,6 +1057,7 @@ export default function App() {
     setCommitBusy(true);
     setCommitError("");
     const content = getCachedDoc(f.id, f.content);
+    void recordLocalVersion(repoKey(ghTree.ref), meta.path, content, "commit", commitMsg.trim() || `Update ${meta.path}`);
     await engine.current.enqueue({
       path: meta.path,
       baseSha: meta.sha,
@@ -1196,6 +1208,9 @@ export default function App() {
       setHistoryPreview(null);
       setHistoryList(null);
       setHistoryEnd(false);
+      setHistoryLocal(null);
+      const tree = ghTreeRef.current;
+      if (path && tree) void loadLocalHistory(repoKey(tree.ref), path).then(setHistoryLocal);
       void loadHistoryPage(path, true);
     },
     [loadHistoryPage]
@@ -1230,14 +1245,30 @@ export default function App() {
     const content = historyPreview?.content;
     if (!path || content === undefined || content === null) return;
     const id = `gh:${path}`;
+    // 恢复前把当前编辑器内容留存为本地版本，防误操作丢内容
+    const tree = ghTreeRef.current;
+    if (tree) {
+      const meta = ghMeta.current.get(id);
+      const current = getCachedDoc(id, meta?.baseContent ?? "");
+      if (current !== content) void recordLocalVersion(repoKey(tree.ref), path, current, "restore", "恢复前自动留存");
+    }
     setCachedDoc(id, content);
     setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, content } : f)));
     setDirty((d) => new Set(d).add(id));
     openFile(id);
     setHistoryFor(null);
     setHistoryPreview(null);
-    appendLog([{ kind: "info", text: `历史：已将 ${path} 恢复到 ${historyPreview!.sha.slice(0, 7)} 版本（未提交，Ctrl+S 提交）` }]);
+    appendLog([{ kind: "info", text: `历史：已将 ${path} 恢复到 ${historyPreview!.sha.includes(":") ? "本地版本" : historyPreview!.sha.slice(0, 7)}（未提交，Ctrl+S 提交）` }]);
   }, [historyFor, historyPreview, openFile, appendLog]);
+
+  /** 文件历史时间线：本地编辑版本 + GitHub 提交合并，按时间倒序 */
+  const historyTimeline = useMemo(() => {
+    if (!historyFor?.path) return null;
+    const items: Array<{ key: string; time: number; commit?: GhCommit; local?: LocalVersion }> = [];
+    for (const v of historyLocal ?? []) items.push({ key: v.id, time: v.savedAt, local: v });
+    for (const c of historyList ?? []) items.push({ key: c.sha, time: c.date ? Date.parse(c.date) : 0, commit: c });
+    return items.sort((a, b) => b.time - a.time);
+  }, [historyFor, historyLocal, historyList]);
 
   const switchBranch = useCallback(
     async (name: string) => {
@@ -2477,7 +2508,61 @@ export default function App() {
             </div>
             <div className="history-body">
               <div className="history-list">
-                {historyList === null ? (
+                {historyFor.path && historyTimeline ? (
+                  historyTimeline.length === 0 && historyList !== null ? (
+                    <div className="branch-menu-empty">还没有任何历史记录</div>
+                  ) : (
+                    <>
+                      {historyTimeline.map((it, i) => (
+                        <button
+                          key={it.key}
+                          className={`history-item${historyPreview?.sha === (it.local ? it.local.id : it.commit!.sha) ? " active" : ""}`}
+                          onClick={() => {
+                            if (it.local) setHistoryPreview({ sha: it.local.id, content: it.local.content });
+                            else void previewHistoryVersion(it.commit!.sha);
+                          }}
+                        >
+                          <span className="history-rail">
+                            <span className={`history-dot${it.local ? " local" : it.commit!.parents.length > 1 ? " merge" : ""}`} />
+                            {i < historyTimeline.length - 1 && <span className="history-line" />}
+                          </span>
+                          <span className="history-main">
+                            <span className="history-msg">
+                              {it.local
+                                ? it.local.label || (it.local.kind === "save" ? "本地编辑快照" : it.local.kind === "commit" ? "提交前留存" : "恢复前留存")
+                                : it.commit!.message.split("\n")[0]}
+                            </span>
+                            <span className="history-meta">
+                              {it.local ? (
+                                <>本地 · {relTime(new Date(it.local.savedAt).toISOString())}</>
+                              ) : (
+                                <>
+                                  {it.commit!.avatar && <img className="history-avatar" src={it.commit!.avatar} alt="" />}
+                                  {it.commit!.author} · {relTime(it.commit!.date)}
+                                  {it.commit!.parents.length > 1 && <span className="history-mergetag">merge</span>}
+                                </>
+                              )}
+                            </span>
+                          </span>
+                          {it.local ? (
+                            <span className="history-localtag">本地</span>
+                          ) : (
+                            <span className="history-sha">{it.commit!.sha.slice(0, 7)}</span>
+                          )}
+                        </button>
+                      ))}
+                      {historyList === null ? (
+                        <div className="branch-menu-empty"><Loader size={14} /> 正在加载 GitHub 提交…</div>
+                      ) : (
+                        !historyEnd && (
+                          <button className="history-more" disabled={historyLoading} onClick={() => void loadHistoryPage(historyFor.path, false)}>
+                            {historyLoading ? <><Loader size={12} /> 加载中…</> : "加载更早的提交"}
+                          </button>
+                        )
+                      )}
+                    </>
+                  )
+                ) : historyList === null ? (
                   <div className="branch-menu-empty"><Loader size={14} /> 正在加载提交历史…</div>
                 ) : historyList.length === 0 ? (
                   <div className="branch-menu-empty">没有提交记录</div>
@@ -2515,7 +2600,7 @@ export default function App() {
               {historyFor.path && historyPreview && (
                 <div className="history-preview">
                   <div className="history-preview-head">
-                    <span>{historyFor.path} @ {historyPreview.sha.slice(0, 7)}</span>
+                    <span>{historyFor.path} @ {historyPreview.sha.includes(":") ? "本地版本" : historyPreview.sha.slice(0, 7)}</span>
                     <button className="history-restore" disabled={historyPreview.content === null} onClick={restoreHistoryVersion}>
                       恢复此版本到编辑器
                     </button>

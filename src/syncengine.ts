@@ -25,6 +25,7 @@ const DB_NAME = "lumen-sync";
 const META_STORE = "meta";
 const TX_STORE = "transactions";
 const DRAFT_STORE = "drafts";
+const HISTORY_STORE = "history";
 
 export function repoKey(ref: GhRepoRef): string {
   return `${ref.owner}/${ref.repo}@${ref.branch}`;
@@ -56,12 +57,13 @@ function openDb(): Promise<IDBDatabase | null> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve) => {
     try {
-      const req = indexedDB.open(DB_NAME, 2);
+      const req = indexedDB.open(DB_NAME, 3);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE);
         if (!db.objectStoreNames.contains(TX_STORE)) db.createObjectStore(TX_STORE);
         if (!db.objectStoreNames.contains(DRAFT_STORE)) db.createObjectStore(DRAFT_STORE);
+        if (!db.objectStoreNames.contains(HISTORY_STORE)) db.createObjectStore(HISTORY_STORE);
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => resolve(null);
@@ -181,6 +183,52 @@ export function deleteDraft(key: string): Promise<void> {
 
 export function loadDrafts(repo: string): Promise<Draft[]> {
   return idbGetAll<Draft>(DRAFT_STORE).then((all) => all.filter((d) => d.repoKey === repo));
+}
+
+/**
+ * 本地编辑历史：每次保存/提交时留存一份版本快照（IndexedDB）。
+ * 同内容去重，每个文件保留最近 MAX_LOCAL_VERSIONS 份。
+ */
+export interface LocalVersion {
+  id: string;
+  repoKey: string;
+  path: string;
+  content: string;
+  savedAt: number;
+  kind: "save" | "commit" | "restore";
+  label?: string;
+}
+
+const MAX_LOCAL_VERSIONS = 50;
+
+export async function recordLocalVersion(
+  repo: string,
+  path: string,
+  content: string,
+  kind: LocalVersion["kind"],
+  label?: string
+): Promise<LocalVersion | null> {
+  const all = await idbGetAll<LocalVersion>(HISTORY_STORE);
+  const mine = all.filter((v) => v.repoKey === repo && v.path === path).sort((a, b) => b.savedAt - a.savedAt);
+  if (mine[0]?.content === content) return null; // 同内容去重
+  const v: LocalVersion = {
+    id: `${repo}:${path}:${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    repoKey: repo,
+    path,
+    content,
+    savedAt: Date.now(),
+    kind,
+    label,
+  };
+  const overflow = mine.slice(MAX_LOCAL_VERSIONS - 1).map((o) => o.id);
+  await idbReplace(HISTORY_STORE, overflow, v.id, v);
+  return v;
+}
+
+export function loadLocalHistory(repo: string, path: string): Promise<LocalVersion[]> {
+  return idbGetAll<LocalVersion>(HISTORY_STORE).then((all) =>
+    all.filter((v) => v.repoKey === repo && v.path === path).sort((a, b) => b.savedAt - a.savedAt)
+  );
 }
 
 /** 本地引导：从 IndexedDB 读取仓库树快照，秒开无网络。 */

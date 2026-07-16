@@ -559,6 +559,11 @@ html[data-theme="dark"] .gh-modal {
   background: var(--fg-3); border: 1.5px solid var(--surface);
 }
 .history-dot.merge { background: #7c7cec; }
+.history-dot.local { background: #3fb26f; }
+.history-localtag {
+  flex: none; align-self: center; font-size: 10px; color: #3fb26f;
+  border: 1px solid #3fb26f66; border-radius: 4px; padding: 0 4px; line-height: 14px;
+}
 .history-line {
   position: absolute; top: 14px; bottom: -8px; width: 1.5px;
   background: var(--surface-3, #cccccc55);
