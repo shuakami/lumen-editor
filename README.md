@@ -89,11 +89,11 @@ Measured with Vite 6 from a clean production install:
 
 | Import | Initial JS | gzip | Brotli | Initial chunks |
 | --- | ---: | ---: | ---: | ---: |
-| `lumenedit/sync` | 9.3 kB | 3.7 kB | 3.1 kB | 1 |
-| `lumenedit` (`SyncEngine` only) | 9.3 kB | 3.7 kB | 3.1 kB | 1 |
-| `lumenedit/editor` | 480.3 kB | 156.9 kB | 133.0 kB | lazy language chunks excluded |
+| `lumenedit/sync` | 9.5 kB | 3.8 kB | 3.2 kB | 1 |
+| `lumenedit` (`SyncEngine` only) | 9.5 kB | 3.8 kB | 3.2 kB | 1 |
+| `lumenedit/editor` | 485.8 kB | 159.2 kB | 134.8 kB | lazy language chunks excluded |
 
-The npm tarball is about 48.7 kB (144.0 kB unpacked). A clean production dependency tree occupies about 15.9 MiB across 55 packages. Language parsers, C# support and Markdown preview dependencies load only when used.
+The npm tarball is about 49.0 kB (145.0 kB unpacked). A clean production dependency tree occupies about 15.9 MiB across 55 packages. Language parsers, C# support and Markdown preview dependencies load only when used.
 
 ## License
 

@@ -26,6 +26,7 @@ const META_STORE = "meta";
 const TX_STORE = "transactions";
 const DRAFT_STORE = "drafts";
 const HISTORY_STORE = "history";
+const HISTORY_BY_FILE = "by-file-saved-at";
 
 export function repoKey(ref: GhRepoRef): string {
   return `${ref.owner}/${ref.repo}@${ref.branch}`;
@@ -57,13 +58,18 @@ function openDb(): Promise<IDBDatabase | null> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve) => {
     try {
-      const req = indexedDB.open(DB_NAME, 3);
+      const req = indexedDB.open(DB_NAME, 4);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE);
         if (!db.objectStoreNames.contains(TX_STORE)) db.createObjectStore(TX_STORE);
         if (!db.objectStoreNames.contains(DRAFT_STORE)) db.createObjectStore(DRAFT_STORE);
-        if (!db.objectStoreNames.contains(HISTORY_STORE)) db.createObjectStore(HISTORY_STORE);
+        const history = db.objectStoreNames.contains(HISTORY_STORE)
+          ? req.transaction!.objectStore(HISTORY_STORE)
+          : db.createObjectStore(HISTORY_STORE);
+        if (!history.indexNames.contains(HISTORY_BY_FILE)) {
+          history.createIndex(HISTORY_BY_FILE, ["repoKey", "path", "savedAt"]);
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => resolve(null);
@@ -201,6 +207,33 @@ export interface LocalVersion {
 
 const MAX_LOCAL_VERSIONS = 50;
 
+function idbGetHistory(repo: string, path: string): Promise<LocalVersion[]> {
+  return openDb().then(
+    (db) =>
+      new Promise<LocalVersion[]>((resolve) => {
+        if (!db) return resolve([]);
+        try {
+          const index = db.transaction(HISTORY_STORE, "readonly").objectStore(HISTORY_STORE).index(HISTORY_BY_FILE);
+          const range = IDBKeyRange.bound(
+            [repo, path, 0],
+            [repo, path, Number.MAX_SAFE_INTEGER]
+          );
+          const versions: LocalVersion[] = [];
+          const req = index.openCursor(range, "prev");
+          req.onsuccess = () => {
+            const cursor = req.result;
+            if (!cursor) return resolve(versions);
+            versions.push(cursor.value as LocalVersion);
+            cursor.continue();
+          };
+          req.onerror = () => resolve([]);
+        } catch {
+          resolve([]);
+        }
+      })
+  );
+}
+
 export async function recordLocalVersion(
   repo: string,
   path: string,
@@ -208,8 +241,7 @@ export async function recordLocalVersion(
   kind: LocalVersion["kind"],
   label?: string
 ): Promise<LocalVersion | null> {
-  const all = await idbGetAll<LocalVersion>(HISTORY_STORE);
-  const mine = all.filter((v) => v.repoKey === repo && v.path === path).sort((a, b) => b.savedAt - a.savedAt);
+  const mine = await idbGetHistory(repo, path);
   if (mine[0]?.content === content) return null; // 同内容去重
   const v: LocalVersion = {
     id: `${repo}:${path}:${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -226,9 +258,7 @@ export async function recordLocalVersion(
 }
 
 export function loadLocalHistory(repo: string, path: string): Promise<LocalVersion[]> {
-  return idbGetAll<LocalVersion>(HISTORY_STORE).then((all) =>
-    all.filter((v) => v.repoKey === repo && v.path === path).sort((a, b) => b.savedAt - a.savedAt)
-  );
+  return idbGetHistory(repo, path);
 }
 
 /** 本地引导：从 IndexedDB 读取仓库树快照，秒开无网络。 */

@@ -281,8 +281,9 @@ const activeLineSelectionFix = EditorView.updateListener.of((update) => {
   }
 });
  
+const DARK_THEME: Extension[] = [darkChrome, ...darkHighlight, activeLineSelectionFix];
+const LIGHT_THEME: Extension[] = [lightChrome, ...lightHighlight, activeLineSelectionFix];
+
 export function editorTheme(dark: boolean): Extension[] {
-  return dark
-    ? [darkChrome, ...darkHighlight, activeLineSelectionFix]
-    : [lightChrome, ...lightHighlight, activeLineSelectionFix];
+  return dark ? DARK_THEME : LIGHT_THEME;
 }

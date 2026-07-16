@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { EditorView } from "@codemirror/view";
 import { editorSetup } from "./editor/setup";
 import { EditorState, Compartment, type Text } from "@codemirror/state";
@@ -35,6 +35,7 @@ const viewRegistry = new Map<string, EditorView>();
 
 /** 同步引擎热更新打开中的文件：刷新文档缓存，并把新内容应用到已挂载的编辑器视图。 */
 export function setCachedDoc(fileId: string, doc: string): void {
+  if (docCache.get(fileId) === doc) return;
   docCache.set(fileId, doc);
   const view = viewRegistry.get(fileId);
   if (!view || view.state.doc.toString() === doc) return;
@@ -80,12 +81,13 @@ export function openGotoLine(fileId: string): boolean {
   return true;
 }
 
-export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCursor }: EditorProps) {
+export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCursor }: EditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeCompartment = useRef(new Compartment());
   const callbacks = useRef({ onDocChange, onCursor });
-  callbacks.current = { onDocChange, onCursor };
+  callbacks.current.onDocChange = onDocChange;
+  callbacks.current.onCursor = onCursor;
   const darkRef = useRef(dark);
  
   useEffect(() => {
@@ -159,4 +161,4 @@ export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCurs
   }, [dark]);
  
   return <div ref={hostRef} className="editor-pane" />;
-}
+});

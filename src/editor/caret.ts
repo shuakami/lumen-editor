@@ -35,9 +35,6 @@ class SmoothCaret {
         this.caret.style.opacity = "1";
         this.caret.style.height = `${pos.bottom - pos.top}px`;
         this.caret.style.transform = `translate(${x}px, ${y}px)`;
-        this.caret.style.animation = "none";
-        void this.caret.offsetWidth;
-        this.caret.style.animation = "";
       },
     });
   }
@@ -47,11 +44,13 @@ class SmoothCaret {
   }
 }
  
+const SMOOTH_CARET: Extension = [
+  ViewPlugin.fromClass(SmoothCaret),
+  EditorView.theme({
+    ".cm-cursorLayer": { display: "none" },
+  }),
+];
+
 export function smoothCaret(): Extension {
-  return [
-    ViewPlugin.fromClass(SmoothCaret),
-    EditorView.theme({
-      ".cm-cursorLayer": { display: "none" },
-    }),
-  ];
+  return SMOOTH_CARET;
 }

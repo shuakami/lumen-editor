@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorState, Compartment, StateEffect, type Extension } from "@codemirror/state";
 import {
@@ -20,7 +20,7 @@ import type { CursorInfo } from "./Editor";
  
 export const HYPER_COUNT = 10_000_000;
 const LINES_PER_CLASS = 20;
-const CHUNK = 10_000;
+const CHUNK = 2_000;
 const CHUNKS = HYPER_COUNT / CHUNK;
 const WINDOW_CHUNKS = 3;
 
@@ -66,12 +66,27 @@ export function generatedLine(i: number): string {
  
 /** Sparse chunk overrides — only chunks the user actually edited are stored. */
 const editedChunks = new Map<number, string>();
+const editedChunkLineDeltas = new Map<number, number>();
+let totalLineDelta = 0;
+const generatedChunkCache = new Map<number, string>();
+const GENERATED_CACHE_LIMIT = WINDOW_CHUNKS + 2;
  
 function generatedChunkText(idx: number): string {
+  const cached = generatedChunkCache.get(idx);
+  if (cached !== undefined) {
+    generatedChunkCache.delete(idx);
+    generatedChunkCache.set(idx, cached);
+    return cached;
+  }
   const start = idx * CHUNK;
   const parts: string[] = [];
   for (let i = 0; i < CHUNK; i++) parts.push(generatedLine(start + i));
-  return parts.join("\n");
+  const text = parts.join("\n");
+  generatedChunkCache.set(idx, text);
+  if (generatedChunkCache.size > GENERATED_CACHE_LIMIT) {
+    generatedChunkCache.delete(generatedChunkCache.keys().next().value!);
+  }
+  return text;
 }
  
 function chunkText(idx: number): string {
@@ -80,18 +95,32 @@ function chunkText(idx: number): string {
  
 function linesBeforeChunk(idx: number): number {
   let lines = idx * CHUNK;
-  for (const [k, text] of editedChunks) {
-    if (k < idx) {
-      let n = 1;
-      for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
-      lines += n - CHUNK;
-    }
-  }
+  for (const [k, delta] of editedChunkLineDeltas) if (k < idx) lines += delta;
   return lines;
 }
  
 function totalLines(): number {
-  return linesBeforeChunk(CHUNKS);
+  return HYPER_COUNT + totalLineDelta;
+}
+
+function lineDelta(text: string): number {
+  let lines = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++;
+  return lines - CHUNK;
+}
+
+function storeEditedChunk(idx: number, text: string): void {
+  const previousDelta = editedChunkLineDeltas.get(idx) ?? 0;
+  if (text === generatedChunkText(idx)) {
+    editedChunks.delete(idx);
+    editedChunkLineDeltas.delete(idx);
+    totalLineDelta -= previousDelta;
+    return;
+  }
+  const nextDelta = lineDelta(text);
+  editedChunks.set(idx, text);
+  editedChunkLineDeltas.set(idx, nextDelta);
+  totalLineDelta += nextDelta - previousDelta;
 }
  
 interface HyperEditorProps {
@@ -99,7 +128,7 @@ interface HyperEditorProps {
   onCursor: (info: CursorInfo) => void;
 }
  
-export function HyperEditor({ dark, onCursor }: HyperEditorProps) {
+export const HyperEditor = memo(function HyperEditor({ dark, onCursor }: HyperEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeCompartment = useRef(new Compartment());
@@ -140,14 +169,12 @@ export function HyperEditor({ dark, onCursor }: HyperEditorProps) {
       });
  
     const commitWindow = (state: EditorState) => {
-      const doc = state.doc.toString();
       for (let k = 0; k < windowChunkCount(); k++) {
         const from = boundaries[k];
-        const to = k + 1 < boundaries.length ? boundaries[k + 1] - 1 : doc.length;
-        const text = doc.slice(from, to);
+        const to = k + 1 < boundaries.length ? boundaries[k + 1] - 1 : state.doc.length;
+        const text = state.doc.sliceString(from, to);
         const idx = firstChunk + k;
-        if (text === generatedChunkText(idx)) editedChunks.delete(idx);
-        else editedChunks.set(idx, text);
+        if (text !== editedChunks.get(idx)) storeEditedChunk(idx, text);
       }
     };
  
@@ -260,6 +287,16 @@ export function HyperEditor({ dark, onCursor }: HyperEditorProps) {
       thumb.style.height = `${thumbH}px`;
       thumb.style.transform = `translateY(${ratio * maxTop}px)`;
     };
+
+    let thumbFrame = 0;
+    const scheduleThumbUpdate = () => {
+      if (!thumbFrame) {
+        thumbFrame = window.requestAnimationFrame(() => {
+          thumbFrame = 0;
+          updateThumb();
+        });
+      }
+    };
  
     let dragging: { startY: number; startRatio: number } | null = null;
     const ratioToLine = (ratio: number) => {
@@ -290,7 +327,7 @@ export function HyperEditor({ dark, onCursor }: HyperEditorProps) {
     // ---- keep window sliding while the user scrolls natively ----
     const onScroll = () => {
       if (swapping) return;
-      updateThumb();
+      scheduleThumbUpdate();
       const topLine = view.scrollDOM.scrollTop / lineHeight();
       const docLines = view.state.doc.lines;
       const viewLines = view.scrollDOM.clientHeight / lineHeight();
@@ -300,11 +337,12 @@ export function HyperEditor({ dark, onCursor }: HyperEditorProps) {
     view.scrollDOM.addEventListener("scroll", onScroll);
  
     reportCursor(view.state);
-    requestAnimationFrame(updateThumb);
+    scheduleThumbUpdate();
     view.focus();
  
     return () => {
       commitWindow(view.state);
+      if (thumbFrame) window.cancelAnimationFrame(thumbFrame);
       view.scrollDOM.removeEventListener("scroll", onScroll);
       bar.remove();
       view.destroy();
@@ -321,4 +359,4 @@ export function HyperEditor({ dark, onCursor }: HyperEditorProps) {
   }, [dark]);
  
   return <div ref={hostRef} className="editor-pane hyper-cm" />;
-}
+});

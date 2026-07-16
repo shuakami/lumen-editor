@@ -123,6 +123,42 @@ interface DirNode {
 }
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "ico", "webp", "bmp", "avif"]);
+interface TrailingTask {
+  timer: number;
+  deadline: number;
+}
+
+function scheduleTrailing(
+  tasks: Map<string, TrailingTask>,
+  key: string,
+  delay: number,
+  run: (key: string) => void
+): void {
+  const deadline = Date.now() + delay;
+  const current = tasks.get(key);
+  if (current) {
+    current.deadline = deadline;
+    return;
+  }
+  const task: TrailingTask = { timer: 0, deadline };
+  const flush = () => {
+    const remaining = task.deadline - Date.now();
+    if (remaining > 0) {
+      task.timer = window.setTimeout(flush, remaining);
+      return;
+    }
+    tasks.delete(key);
+    run(key);
+  };
+  task.timer = window.setTimeout(flush, delay);
+  tasks.set(key, task);
+}
+
+function cancelTrailing(tasks: Map<string, TrailingTask>): void {
+  for (const task of tasks.values()) window.clearTimeout(task.timer);
+  tasks.clear();
+}
+
 /** 无法作为文本编辑的二进制文件：编辑器区显示占位 + 下载按钮 */
 const BINARY_EXTS = new Set([
   "exe", "dll", "so", "dylib", "bin", "o", "a", "lib", "obj", "class", "wasm", "pdb",
@@ -321,7 +357,8 @@ export default function App() {
     return () => window.removeEventListener("resize", applyCodeScale);
   }, []);
  
-  const active = openIds.includes(activeId) ? files.find((f) => f.id === activeId) : undefined;
+  const filesById = useMemo(() => new Map(files.map((file) => [file.id, file])), [files]);
+  const active = openIds.includes(activeId) ? filesById.get(activeId) : undefined;
   const paletteRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -501,38 +538,49 @@ export default function App() {
     });
   }, []);
  
-  const autoPushTimers = useRef(new Map<string, number>());
-  const draftTimers = useRef(new Map<string, number>());
+  const autoPushTimers = useRef(new Map<string, TrailingTask>());
+  const draftTimers = useRef(new Map<string, TrailingTask>());
   const ghTreeRef = useRef<GhTree | null>(null);
 
-  const scheduleDraft = useCallback((fileId: string) => {
+  const persistDraft = useCallback((fileId: string) => {
     const meta = ghMeta.current.get(fileId);
     const tree = ghTreeRef.current;
     if (!meta || !tree) return;
     const repo = repoKey(tree.ref);
-    const timers = draftTimers.current;
-    const prev = timers.get(fileId);
-    if (prev !== undefined) window.clearTimeout(prev);
-    timers.set(
-      fileId,
-      window.setTimeout(() => {
-        timers.delete(fileId);
-        const m = ghMeta.current.get(fileId);
-        if (!m) return;
-        const content = getCachedDoc(fileId, m.baseContent);
-        const key = draftKey(repo, m.path);
-        if (m.loaded && content === m.baseContent) void deleteDraft(key);
-        else {
-          void saveDraft({ key, repoKey: repo, path: m.path, content, savedAt: Date.now() });
-          // 本地编辑历史：每个文件最多每 30s 留存一份版本快照
-          const now = Date.now();
-          if (now - (localSnapAt.current.get(m.path) ?? 0) >= 30_000) {
-            localSnapAt.current.set(m.path, now);
-            void recordLocalVersion(repo, m.path, content, "save");
-          }
-        }
-      }, 350)
-    );
+    const content = getCachedDoc(fileId, meta.baseContent);
+    const key = draftKey(repo, meta.path);
+    if (meta.loaded && content === meta.baseContent) void deleteDraft(key);
+    else {
+      void saveDraft({ key, repoKey: repo, path: meta.path, content, savedAt: Date.now() });
+      // 本地编辑历史：每个文件最多每 30s 留存一份版本快照
+      const now = Date.now();
+      if (now - (localSnapAt.current.get(meta.path) ?? 0) >= 30_000) {
+        localSnapAt.current.set(meta.path, now);
+        void recordLocalVersion(repo, meta.path, content, "save");
+      }
+    }
+  }, []);
+
+  const scheduleDraft = useCallback((fileId: string) => {
+    if (!ghMeta.current.has(fileId) || !ghTreeRef.current) return;
+    scheduleTrailing(draftTimers.current, fileId, 350, persistDraft);
+  }, [persistDraft]);
+
+  const autoPush = useCallback((fileId: string) => {
+    const meta = ghMeta.current.get(fileId);
+    const currentEngine = engine.current;
+    const tree = ghTreeRef.current;
+    if (!meta?.loaded || !currentEngine || !tree) return;
+    const content = getCachedDoc(fileId, meta.baseContent);
+    if (content === meta.baseContent) return;
+    void recordLocalVersion(repoKey(tree.ref), meta.path, content, "commit", `Update ${meta.path}`);
+    void currentEngine.enqueue({
+      path: meta.path,
+      baseSha: meta.sha,
+      baseContent: meta.baseContent,
+      content,
+      message: `Update ${meta.path}`,
+    });
   }, []);
 
   const onDocChange = useCallback((fileId: string) => {
@@ -543,29 +591,13 @@ export default function App() {
     }
     const meta = ghMeta.current.get(fileId);
     if (!meta || !meta.loaded || !engine.current) return;
-    const timers = autoPushTimers.current;
-    const prev = timers.get(fileId);
-    if (prev !== undefined) window.clearTimeout(prev);
-    timers.set(
-      fileId,
-      window.setTimeout(() => {
-        timers.delete(fileId);
-        const m = ghMeta.current.get(fileId);
-        const e = engine.current;
-        if (!m || !m.loaded || !e) return;
-        const content = getCachedDoc(fileId, m.baseContent);
-        if (content === m.baseContent) return;
-        void recordLocalVersion(repoKey(ghTreeRef.current!.ref), m.path, content, "commit", `Update ${m.path}`);
-        void e.enqueue({
-          path: m.path,
-          baseSha: m.sha,
-          baseContent: m.baseContent,
-          content,
-          message: `Update ${m.path}`,
-        });
-      }, 2500)
-    );
-  }, [scheduleDraft]);
+    scheduleTrailing(autoPushTimers.current, fileId, 2500, autoPush);
+  }, [scheduleDraft, autoPush]);
+
+  useEffect(() => () => {
+    cancelTrailing(draftTimers.current);
+    cancelTrailing(autoPushTimers.current);
+  }, []);
  
   const appendConsole = useCallback((lines: ConsoleLine[]) => {
     setConsoleLines((prev) => [...prev, ...lines]);
@@ -578,6 +610,19 @@ export default function App() {
   const consoleBodyRef = useRef<HTMLDivElement>(null);
   const consoleScrollPos = useRef(new Map<string, number>());
   const cursorMap = useRef(new Map<string, { line: number; col: number }>());
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  const splitIdRef = useRef(splitId);
+  splitIdRef.current = splitId;
+  const onMainCursor = useCallback((cursor: CursorInfo) => {
+    cursorStore.set(cursor);
+    cursorMap.current.set(activeIdRef.current, { line: cursor.line, col: cursor.col });
+  }, [cursorStore]);
+  const onSplitCursor = useCallback((cursor: CursorInfo) => {
+    cursorStore.set(cursor);
+    const id = splitIdRef.current;
+    if (id) cursorMap.current.set(id, { line: cursor.line, col: cursor.col });
+  }, [cursorStore]);
   const sidebarScrollRef = useRef(0);
   const treeNavRef = useRef<HTMLElement>(null);
 
@@ -714,8 +759,8 @@ export default function App() {
   }, [appendConsole]);
  
   const runActive = useCallback(() => {
-    void runFile(files.find((x) => x.id === activeId && openIds.includes(x.id)));
-  }, [runFile, files, activeId, openIds]);
+    void runFile(openIds.includes(activeId) ? filesById.get(activeId) : undefined);
+  }, [runFile, filesById, activeId, openIds]);
  
   const saveFile = useCallback((id?: string) => {
     setDirty((d) => {
@@ -1064,10 +1109,13 @@ export default function App() {
   }, [openGithubRepo, applyTree, appendLog]);
 
   const closeGithub = useCallback(() => {
+    cancelTrailing(draftTimers.current);
+    cancelTrailing(autoPushTimers.current);
     preloader.current?.stop();
     preloader.current = null;
     engine.current?.stop();
     engine.current = null;
+    ghTreeRef.current = null;
     setBranches(null);
     setBranchMenuOpen(false);
     setSyncStatus({ state: "synced", pending: 0 });
@@ -1094,7 +1142,7 @@ export default function App() {
   const doCommit = useCallback(async () => {
     if (!commitFor || !ghTree) return;
     const meta = ghMeta.current.get(commitFor);
-    const f = files.find((x) => x.id === commitFor);
+    const f = filesById.get(commitFor);
     if (!meta || !f) return;
     if (!ghTree.ref.token) {
       setCommitError("未填写访问令牌（ghp_…），无法提交。请在 File → 打开 GitHub 仓库 里填入后重新打开仓库。");
@@ -1118,7 +1166,7 @@ export default function App() {
     }
     setCommitBusy(false);
     setCommitFor(null);
-  }, [commitFor, ghTree, files, commitMsg, appendLog]);
+  }, [commitFor, ghTree, filesById, commitMsg, appendLog]);
 
   /** 应用远端 delta packets：文件树、元数据、打开中的文件实时热更新。 */
   handleDeltasRef.current = (deltas, newHead) => {
@@ -1928,7 +1976,7 @@ export default function App() {
           <div className="editor-col" style={splitId ? { flex: `${splitRatio} 1 0` } : undefined}>
           <div className="tabstrip">
             {openIds
-              .map((id) => files.find((f) => f.id === id))
+              .map((id) => filesById.get(id))
               .filter((f): f is SampleFile => Boolean(f))
               .map((f) => (
                 <div
@@ -2133,10 +2181,7 @@ export default function App() {
               initialDoc={active.content}
               dark={dark}
               onDocChange={onDocChange}
-              onCursor={(c) => {
-                cursorStore.set(c);
-                cursorMap.current.set(active.id, { line: c.line, col: c.col });
-              }}
+              onCursor={onMainCursor}
             />
           )}
           {dropZone === "main-right" && <div className="drop-overlay right" />}
@@ -2144,7 +2189,7 @@ export default function App() {
           </div>
           </div>
           {splitId && (() => {
-            const sf = files.find((f) => f.id === splitId);
+            const sf = filesById.get(splitId);
             return (
               <>
               <div
@@ -2259,10 +2304,7 @@ export default function App() {
                     initialDoc={sf.content}
                     dark={dark}
                     onDocChange={onDocChange}
-                    onCursor={(c) => {
-                      cursorStore.set(c);
-                      cursorMap.current.set(sf.id, { line: c.line, col: c.col });
-                    }}
+                    onCursor={onSplitCursor}
                   />
                 )}
                 {dropZone === "split-full" && <div className="drop-overlay full" />}
@@ -2431,7 +2473,7 @@ export default function App() {
                                 if (!cmd) return;
                                 const hit = hist.find((h) => h.label === cmd);
                                 if (hit) {
-                                  void runFile(files.find((x) => x.id === hit.fileId));
+                              void runFile(filesById.get(hit.fileId));
                                 } else {
                                   appendConsole([
                                     { kind: "cmd", text: cmd },
