@@ -12,7 +12,7 @@
  * 4. 智能预加载：`Preloader` + 行为学习模型（brain*）。
  *
  * ```tsx
- * import { Editor, openRepo, SyncEngine } from "lumen-editor";
+ * import { Editor, openRepo, SyncEngine } from "lumenedit";
  * ```
  */
 

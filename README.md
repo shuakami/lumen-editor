@@ -40,7 +40,7 @@ Or just open the [live demo][demo-link] — then `File → Open GitHub Repositor
 Lumen is also a reusable library: the editor component, GitHub layer, sync engine, local history and smart preloader can each be imported independently.
 
 ```bash
-npm install shuakami/lumen-editor   # install from GitHub (builds dist-lib automatically)
+npm install lumenedit
 ```
 
 ```tsx
@@ -51,7 +51,7 @@ import {
   SyncEngine, repoKey,         // incremental sync engine with offline transaction queue
   loadLocalHistory,            // IndexedDB local edit history
   Preloader, brainScore,       // smart preloading with a learned open-model
-} from "lumen-editor";
+} from "lumenedit";
 
 const tree = await openRepo("shuakami", "lumen-editor");
 
