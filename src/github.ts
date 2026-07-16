@@ -202,6 +202,51 @@ function merge3(base: string, ours: string, theirs: string): { text: string; cle
   return { text: out.join("\n"), clean };
 }
 
+export interface GhCommit {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+  avatar?: string;
+  parents: string[];
+}
+
+/** 提交历史（分支或单个文件），用于提交树与文件修改历史。 */
+export async function listCommits(
+  ref: GhRepoRef,
+  opts: { path?: string; page?: number; perPage?: number } = {}
+): Promise<GhCommit[]> {
+  const params = new URLSearchParams({
+    sha: ref.branch,
+    per_page: String(opts.perPage ?? 30),
+    page: String(opts.page ?? 1),
+  });
+  if (opts.path) params.set("path", opts.path);
+  const r = await gh<Array<{
+    sha: string;
+    commit: { message: string; author?: { name?: string; date?: string } };
+    author?: { login?: string; avatar_url?: string } | null;
+    parents: Array<{ sha: string }>;
+  }>>(`/repos/${ref.owner}/${ref.repo}/commits?${params}`, ref.token);
+  return r.map((c) => ({
+    sha: c.sha,
+    message: c.commit.message,
+    author: c.author?.login || c.commit.author?.name || "unknown",
+    date: c.commit.author?.date ?? "",
+    avatar: c.author?.avatar_url,
+    parents: c.parents.map((p) => p.sha),
+  }));
+}
+
+/** 读取某个提交处的文件内容（文件历史查看）。 */
+export async function fetchFileAtCommit(ref: GhRepoRef, path: string, commitSha: string): Promise<string> {
+  const f = await gh<{ content: string; encoding: string }>(
+    `/repos/${ref.owner}/${ref.repo}/contents/${encodeURIComponent(path).replace(/%2F/g, "/")}?ref=${commitSha}`,
+    ref.token
+  );
+  return f.encoding === "base64" ? b64ToUtf8(f.content) : f.content;
+}
+
 export interface GhCodeHit {
   path: string;
   fragment: string;

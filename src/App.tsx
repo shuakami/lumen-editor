@@ -5,7 +5,7 @@ import { SAMPLE_FILES, type SampleFile } from "./samples";
 import { languageFor } from "./editor/languages";
 import { applyCodeScale } from "./editor/scale";
 import { isRunnable, runCode, runCommandLabel } from "./editor/run";
-import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, searchCode, type GhTree, type GhBranch, type GhFileDelta, type GhCodeHit } from "./github";
+import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, listCommits, fetchFileAtCommit, searchCode, type GhTree, type GhBranch, type GhFileDelta, type GhCodeHit, type GhCommit } from "./github";
 import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, type SyncState } from "./syncengine";
 import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
 import { Preloader, type PreloadTarget } from "./preload";
@@ -33,6 +33,10 @@ import layoutPanelIcon from "./assets/codicons/layout-panel.svg";
 import openPreviewIcon from "./assets/codicons/open-preview.svg";
 import logoGlyph from "./assets/logo-glyph.png";
 import layoutPanelOffIcon from "./assets/codicons/layout-panel-off.svg";
+import cloudUploadIcon from "./assets/codicons/cloud-upload.svg";
+import gitBranchIcon from "./assets/codicons/git-branch.svg";
+import repoIcon from "./assets/codicons/repo.svg";
+import historyIcon from "./assets/codicons/history.svg";
 interface Command {
   id: string;
   label: string;
@@ -138,6 +142,39 @@ function ancestorDirs(dir: string): string[] {
  
 const HAS_SAVED_REPO = localStorage.getItem("lumen.gh.repo") !== null;
 
+/** 最近打开的仓库（本地记录，最多 8 个） */
+interface RecentRepo {
+  repo: string;
+  branch: string;
+  at: number;
+}
+const RECENTS_KEY = "lumen.recent.repos";
+function loadRecents(): RecentRepo[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]") as RecentRepo[];
+    return Array.isArray(list) ? list.filter((r) => typeof r?.repo === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function pushRecent(repo: string, branch: string): RecentRepo[] {
+  const list = loadRecents().filter((r) => !(r.repo === repo && r.branch === branch));
+  list.unshift({ repo, branch, at: Date.now() });
+  const out = list.slice(0, 8);
+  localStorage.setItem(RECENTS_KEY, JSON.stringify(out));
+  return out;
+}
+
+function relTime(iso: string): string {
+  if (!iso) return "";
+  const d = Date.now() - new Date(iso).getTime();
+  if (d < 60_000) return "刚刚";
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)} 分钟前`;
+  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)} 小时前`;
+  if (d < 30 * 86_400_000) return `${Math.floor(d / 86_400_000)} 天前`;
+  return new Date(iso).toLocaleDateString();
+}
+
 export default function App() {
   const [openIds, setOpenIds] = useState<string[]>(HAS_SAVED_REPO ? [] : ["program", "hyper"]);
   const [activeId, setActiveId] = useState(HAS_SAVED_REPO ? "" : "program");
@@ -206,6 +243,15 @@ export default function App() {
   const [branches, setBranches] = useState<GhBranch[] | null>(null);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branchBusy, setBranchBusy] = useState(false);
+  const [recents, setRecents] = useState<RecentRepo[]>(loadRecents);
+  // 提交历史（path 为空 = 分支提交树；有 path = 单文件修改历史）
+  const [historyFor, setHistoryFor] = useState<null | { path?: string }>(null);
+  const [historyList, setHistoryList] = useState<GhCommit[] | null>(null);
+  const [historyEnd, setHistoryEnd] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPreview, setHistoryPreview] = useState<null | { sha: string; content: string | null }>(null);
+  const historyCache = useRef(new Map<string, { list: GhCommit[]; end: boolean }>());
+  const historyBlobCache = useRef(new Map<string, string>());
   const handleDeltasRef = useRef<(deltas: GhFileDelta[], newHead: string) => void>(() => {});
   const untitledCount = useRef(0);
   const autoSaveRef = useRef(autoSave);
@@ -359,6 +405,8 @@ export default function App() {
     },
     [loadGhFile, openFile]
   );
+  const openFileSmartRef = useRef(openFileSmart);
+  openFileSmartRef.current = openFileSmart;
  
   const closeFile = useCallback((id: string) => {
     setOpenIds((ids) => {
@@ -758,6 +806,8 @@ export default function App() {
       setCollapsed(new Set(fs.flatMap((f) => (f.dir ? ancestorDirs(f.dir) : []))));
       setGhOpen(false);
       appendLog([{ kind: "info", text: `GitHub：已打开 ${tree.ref.owner}/${tree.ref.repo}@${tree.ref.branch}（${fs.length} 个文件）` }]);
+      setRecents(pushRecent(`${tree.ref.owner}/${tree.ref.repo}`, tree.ref.branch));
+      historyCache.current.clear();
 
       startEngine(tree);
       void saveSnapshot({ key: repoKey(tree.ref), headSha: tree.headSha, entries: tree.entries, updatedAt: Date.now() });
@@ -883,8 +933,44 @@ export default function App() {
   useEffect(() => {
     if (restoredRepo.current) return;
     restoredRepo.current = true;
+    // 链接参数快捷打开：?mode=text 纯文本在线编辑；?open=owner/repo[&branch=..][&file=..] 快开仓库
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get("mode");
+    if (mode === "text") {
+      const id = "quicktext";
+      setFiles([{ id, name: params.get("name")?.trim() || "untitled.txt", content: "" }]);
+      setOpenIds([id]);
+      setActiveId(id);
+      setGhRestoring(false);
+      appendLog([{ kind: "info", text: "快捷打开：文本在线编辑模式" }]);
+      return;
+    }
+    const quickOpen = params.get("open") || params.get("repo");
+    if (quickOpen && parseRepoInput(quickOpen)) {
+      const branch = params.get("branch") ?? "";
+      const file = params.get("file") ?? "";
+      const token = localStorage.getItem("lumen.gh.token") ?? "";
+      setGhRestoring(true);
+      setGhRepoInput(quickOpen);
+      setGhBranchInput(branch);
+      appendLog([{ kind: "info", text: `快捷打开：正在打开 ${quickOpen}${branch ? `@${branch}` : ""}…` }]);
+      void (async () => {
+        const ok = await openGithubRepo(quickOpen, token, branch);
+        if (ok && file) {
+          const id = `gh:${file}`;
+          if (ghMeta.current.has(id)) void openFileSmartRef.current(id);
+          else appendLog([{ kind: "err", text: `快捷打开：仓库里没有文件 ${file}` }]);
+        }
+        if (!ok) appendLog([{ kind: "err", text: `快捷打开：打开 ${quickOpen} 失败` }]);
+        setGhRestoring(false);
+      })();
+      return;
+    }
     const repo = localStorage.getItem("lumen.gh.repo");
-    if (!repo) return;
+    if (!repo) {
+      setGhRestoring(false);
+      return;
+    }
     const branch = localStorage.getItem("lumen.gh.branch") ?? "";
     const token = localStorage.getItem("lumen.gh.token") ?? "";
     setGhRepoInput(repo);
@@ -1067,6 +1153,92 @@ export default function App() {
     if (notes.length > 0) appendLog(notes.slice(0, 12).map((text) => ({ kind: "info" as const, text: `同步：${text}` })));
   };
 
+  /** 提交历史：分支提交树 / 单文件修改历史，页面级缓存 + 增量加载 */
+  const loadHistoryPage = useCallback(
+    async (path: string | undefined, reset: boolean) => {
+      const tree = ghTreeRef.current;
+      if (!tree) return;
+      const key = `${repoKey(tree.ref)}|${path ?? ""}`;
+      if (reset) {
+        const cached = historyCache.current.get(key);
+        if (cached) {
+          setHistoryList(cached.list);
+          setHistoryEnd(cached.end);
+          return;
+        }
+      }
+      setHistoryLoading(true);
+      try {
+        const prev = reset ? [] : (historyCache.current.get(key)?.list ?? []);
+        const page = Math.floor(prev.length / 30) + 1;
+        const batch = await listCommits(tree.ref, { path, page, perPage: 30 });
+        const seen = new Set(prev.map((c) => c.sha));
+        const list = [...prev, ...batch.filter((c) => !seen.has(c.sha))];
+        const end = batch.length < 30;
+        historyCache.current.set(key, { list, end });
+        setHistoryList(list);
+        setHistoryEnd(end);
+      } catch (e) {
+        appendLog([{ kind: "err", text: `GitHub：加载提交历史失败 — ${(e as Error).message}` }]);
+        if (reset) setHistoryList([]);
+        setHistoryEnd(true);
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [appendLog]
+  );
+
+  const openHistory = useCallback(
+    (path?: string) => {
+      setBranchMenuOpen(false);
+      setHistoryFor({ path });
+      setHistoryPreview(null);
+      setHistoryList(null);
+      setHistoryEnd(false);
+      void loadHistoryPage(path, true);
+    },
+    [loadHistoryPage]
+  );
+
+  const previewHistoryVersion = useCallback(
+    async (sha: string) => {
+      const tree = ghTreeRef.current;
+      const path = historyFor?.path;
+      if (!tree || !path) return;
+      const cacheKey = `${sha}:${path}`;
+      const cached = historyBlobCache.current.get(cacheKey);
+      if (cached !== undefined) {
+        setHistoryPreview({ sha, content: cached });
+        return;
+      }
+      setHistoryPreview({ sha, content: null });
+      try {
+        const text = await fetchFileAtCommit(tree.ref, path, sha);
+        historyBlobCache.current.set(cacheKey, text);
+        setHistoryPreview((p) => (p?.sha === sha ? { sha, content: text } : p));
+      } catch (e) {
+        appendLog([{ kind: "err", text: `GitHub：读取历史版本失败 — ${(e as Error).message}` }]);
+        setHistoryPreview((p) => (p?.sha === sha ? null : p));
+      }
+    },
+    [historyFor, appendLog]
+  );
+
+  const restoreHistoryVersion = useCallback(() => {
+    const path = historyFor?.path;
+    const content = historyPreview?.content;
+    if (!path || content === undefined || content === null) return;
+    const id = `gh:${path}`;
+    setCachedDoc(id, content);
+    setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, content } : f)));
+    setDirty((d) => new Set(d).add(id));
+    openFile(id);
+    setHistoryFor(null);
+    setHistoryPreview(null);
+    appendLog([{ kind: "info", text: `历史：已将 ${path} 恢复到 ${historyPreview!.sha.slice(0, 7)} 版本（未提交，Ctrl+S 提交）` }]);
+  }, [historyFor, historyPreview, openFile, appendLog]);
+
   const switchBranch = useCallback(
     async (name: string) => {
       setBranchMenuOpen(false);
@@ -1197,13 +1369,32 @@ export default function App() {
         fileIcon: languageFor(f.name).icon,
         run: () => void openFileSmart(f.id),
       })),
-      { id: "github", label: "打开 GitHub 仓库…", icon: searchIcon, run: () => { setGhError(""); setGhStep(0); setGhOpen(true); } },
+      { id: "github", label: "打开 GitHub 仓库…", icon: repoIcon, run: () => { setGhError(""); setGhStep(0); setGhOpen(true); } },
+      ...recents.slice(0, 5).map((r, i) => ({
+        id: `recent-${i}`,
+        label: `最近打开 ${r.repo}@${r.branch}`,
+        hint: relTime(new Date(r.at).toISOString()),
+        icon: repoIcon,
+        run: () => {
+          setGhRepoInput(r.repo);
+          setGhBranchInput(r.branch);
+          void openGithubRepo(r.repo, localStorage.getItem("lumen.gh.token") ?? "", r.branch);
+        },
+      })),
+      ...(ghTree
+        ? [
+            { id: "commits", label: "查看分支提交树", icon: gitBranchIcon, run: () => openHistory() },
+            ...(activeId && ghMeta.current.has(activeId)
+              ? [{ id: "filehistory", label: `文件修改历史 ${ghMeta.current.get(activeId)!.path}`, icon: historyIcon, run: () => openHistory(ghMeta.current.get(activeId)!.path) }]
+              : []),
+          ]
+        : []),
       { id: "newfile", label: "新建文件", icon: newFileIcon, run: () => newFile() },
       { id: "theme", label: dark ? "切换到浅色主题" : "切换到深色主题", icon: colorModeIcon, run: () => setDark((d) => !d) },
       { id: "find", label: "文件内查找", hint: "Ctrl F", icon: searchIcon, run: () => { if (activeId) window.setTimeout(() => openFindPanel(activeId), 30); } },
       { id: "gotoline", label: "跳转到行", hint: "Ctrl G", icon: arrowRightIcon, run: () => { if (activeId) window.setTimeout(() => openGotoLine(activeId), 30); } },
     ],
-    [files, openFileSmart, dark, newFile, activeId]
+    [files, openFileSmart, dark, newFile, activeId, recents, ghTree, openHistory, openGithubRepo]
   );
  
   const searchCommands = useMemo<Command[]>(() => {
@@ -1273,6 +1464,8 @@ export default function App() {
         setPaletteOpen(false);
         setMenu(null);
         setOpenMenubar(null);
+        setHistoryFor(null);
+        setHistoryPreview(null);
       }
     };
     const onDown = (e: MouseEvent) => {
@@ -1338,6 +1531,14 @@ export default function App() {
         { label: "全部保存", run: () => saveFile() },
         { sep: true },
         { label: "打开 GitHub 仓库…", run: () => { setGhError(""); setGhStep(0); setGhOpen(true); } },
+        ...recents.slice(0, 5).map((r) => ({
+          label: `最近：${r.repo}@${r.branch}`,
+          run: () => {
+            setGhRepoInput(r.repo);
+            setGhBranchInput(r.branch);
+            void openGithubRepo(r.repo, localStorage.getItem("lumen.gh.token") ?? "", r.branch);
+          },
+        })),
         ...(ghTree ? [{ label: `关闭仓库 ${ghTree.ref.owner}/${ghTree.ref.repo}`, run: closeGithub }] : []),
         { sep: true },
         { label: "自动保存", checked: autoSave, run: () => setAutoSave((v) => { if (!v) setDirty(new Set()); return !v; }) },
@@ -1417,6 +1618,9 @@ export default function App() {
         onContextMenu={(e) =>
           openMenu(e, [
             { label: "打开", run: () => void openFileSmart(f.id) },
+            ...(ghMeta.current.has(f.id)
+              ? [{ label: "修改历史…", run: () => openHistory(ghMeta.current.get(f.id)!.path) }]
+              : []),
             { sep: true },
             { label: "重命名…", hint: "F2", run: () => startRenameFile(f) },
             { label: "删除", hint: "Delete", danger: true, run: () => deleteFile(f.id) },
@@ -2176,8 +2380,12 @@ export default function App() {
               title="切换分支"
               onClick={() => setBranchMenuOpen((v) => !v)}
             >
-              {branchBusy ? <Loader size={11} /> : <span className="branch-glyph">⎇</span>}
+              {branchBusy ? <Loader size={11} /> : <span className="cicon status-cicon" style={{ "--icon": `url("${gitBranchIcon}")` } as React.CSSProperties} />}
               {ghTree.ref.owner}/{ghTree.ref.repo} · {ghTree.ref.branch}
+            </button>
+            <button className="status-item status-btn" title="查看分支提交树" onClick={() => openHistory()}>
+              <span className="cicon status-cicon" style={{ "--icon": `url("${historyIcon}")` } as React.CSSProperties} />
+              提交
             </button>
             <span className="status-item sync-item" title="GitHub 超级同步引擎">
               {syncStatus.state === "syncing" ? (
@@ -2185,7 +2393,10 @@ export default function App() {
                   <Loader size={11} /> 同步中…
                 </>
               ) : syncStatus.state === "pending" ? (
-                `⇡ ${syncStatus.pending} 待提交`
+                <>
+                  <span className="cicon status-cicon" style={{ "--icon": `url("${cloudUploadIcon}")` } as React.CSSProperties} />
+                  {syncStatus.pending} 待提交
+                </>
               ) : syncStatus.state === "conflict" ? (
                 `⚠ 冲突 · ${syncStatus.pending} 个提交挂起`
               ) : syncStatus.state === "offline" ? (
@@ -2220,7 +2431,13 @@ export default function App() {
       {branchMenuOpen && ghTree && (
         <div className="ctx-overlay" onMouseDown={() => setBranchMenuOpen(false)}>
           <div className="branch-menu" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="branch-menu-title">切换分支 — {ghTree.ref.owner}/{ghTree.ref.repo}</div>
+            <div className="branch-menu-title">
+              切换分支 — {ghTree.ref.owner}/{ghTree.ref.repo}
+              <button className="branch-menu-commits" onClick={() => openHistory()}>
+                <span className="cicon status-cicon" style={{ "--icon": `url("${historyIcon}")` } as React.CSSProperties} />
+                提交树
+              </button>
+            </div>
             <div className="branch-menu-list">
               {branches === null ? (
                 <div className="branch-menu-empty">
@@ -2235,7 +2452,7 @@ export default function App() {
                     className={`branch-menu-item${b.name === ghTree.ref.branch ? " active" : ""}`}
                     onClick={() => void switchBranch(b.name)}
                   >
-                    <span className="branch-glyph">⎇</span>
+                    <span className="cicon status-cicon" style={{ "--icon": `url("${gitBranchIcon}")` } as React.CSSProperties} />
                     <span className="branch-name">{b.name}</span>
                     <span className="branch-sha">{b.sha.slice(0, 7)}</span>
                     {b.name === ghTree.ref.branch && <img className="branch-check" src={checkIcon} alt="" />}
@@ -2247,6 +2464,73 @@ export default function App() {
         </div>
       )}
 
+      {historyFor && ghTree && (
+        <div className="ghq-overlay" onMouseDown={() => { setHistoryFor(null); setHistoryPreview(null); }}>
+          <div className={`history-modal${historyFor.path && historyPreview ? " with-preview" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="ghq-titlebar">
+              <span className="ghq-titletext">
+                {historyFor.path ? `修改历史 · ${historyFor.path}` : `提交树 · ${ghTree.ref.owner}/${ghTree.ref.repo}@${ghTree.ref.branch}`}
+              </span>
+              <button className="ghq-nav ghq-close" onClick={() => { setHistoryFor(null); setHistoryPreview(null); }}>
+                <span className="cicon" style={{ "--icon": `url("${closeIcon}")` } as React.CSSProperties} />
+              </button>
+            </div>
+            <div className="history-body">
+              <div className="history-list">
+                {historyList === null ? (
+                  <div className="branch-menu-empty"><Loader size={14} /> 正在加载提交历史…</div>
+                ) : historyList.length === 0 ? (
+                  <div className="branch-menu-empty">没有提交记录</div>
+                ) : (
+                  <>
+                    {historyList.map((c, i) => (
+                      <button
+                        key={c.sha}
+                        className={`history-item${historyPreview?.sha === c.sha ? " active" : ""}`}
+                        onClick={() => { if (historyFor.path) void previewHistoryVersion(c.sha); }}
+                      >
+                        <span className="history-rail">
+                          <span className={`history-dot${c.parents.length > 1 ? " merge" : ""}`} />
+                          {i < historyList.length - 1 && <span className="history-line" />}
+                        </span>
+                        <span className="history-main">
+                          <span className="history-msg">{c.message.split("\n")[0]}</span>
+                          <span className="history-meta">
+                            {c.avatar && <img className="history-avatar" src={c.avatar} alt="" />}
+                            {c.author} · {relTime(c.date)}
+                            {c.parents.length > 1 && <span className="history-mergetag">merge</span>}
+                          </span>
+                        </span>
+                        <span className="history-sha">{c.sha.slice(0, 7)}</span>
+                      </button>
+                    ))}
+                    {!historyEnd && (
+                      <button className="history-more" disabled={historyLoading} onClick={() => void loadHistoryPage(historyFor.path, false)}>
+                        {historyLoading ? <><Loader size={12} /> 加载中…</> : "加载更早的提交"}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+              {historyFor.path && historyPreview && (
+                <div className="history-preview">
+                  <div className="history-preview-head">
+                    <span>{historyFor.path} @ {historyPreview.sha.slice(0, 7)}</span>
+                    <button className="history-restore" disabled={historyPreview.content === null} onClick={restoreHistoryVersion}>
+                      恢复此版本到编辑器
+                    </button>
+                  </div>
+                  {historyPreview.content === null ? (
+                    <div className="branch-menu-empty"><Loader size={14} /> 正在读取历史版本…</div>
+                  ) : (
+                    <pre className="history-code">{historyPreview.content}</pre>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {menu && (
         <div className="ctx-overlay" onMouseDown={() => setMenu(null)} onContextMenu={(e) => e.preventDefault()}>
           <div
@@ -2396,10 +2680,32 @@ export default function App() {
                 ) : ghBusy ? (
                   <div className="palette-item hl ghq-action"><Loader size={14} />正在打开 {ghRepoInput}…</div>
                 ) : (
-                  <button className="palette-item hl ghq-action" onClick={next}>
-                    {ghStep === 0 ? "继续" : ghStep === 1 ? (ghTokenInput ? "使用此令牌继续" : "跳过（公开仓库）") : `打开 ${ghRepoInput}`}
-                    <span className="hint">Enter</span>
-                  </button>
+                  <>
+                    <button className="palette-item hl ghq-action" onClick={next}>
+                      {ghStep === 0 ? "继续" : ghStep === 1 ? (ghTokenInput ? "使用此令牌继续" : "跳过（公开仓库）") : `打开 ${ghRepoInput}`}
+                      <span className="hint">Enter</span>
+                    </button>
+                    {ghStep === 0 && recents.length > 0 && (
+                      <>
+                        <div className="palette-group">最近打开</div>
+                        {recents.slice(0, 5).map((r) => (
+                          <button
+                            key={`${r.repo}@${r.branch}`}
+                            className="palette-item ghq-action"
+                            onClick={() => {
+                              setGhRepoInput(r.repo);
+                              setGhBranchInput(r.branch);
+                              void openGithubRepo(r.repo, ghTokenInput, r.branch);
+                            }}
+                          >
+                            <span className="cicon" style={{ "--icon": `url("${repoIcon}")` } as React.CSSProperties} />
+                            {r.repo}@{r.branch}
+                            <span className="hint">{relTime(new Date(r.at).toISOString())}</span>
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -2433,6 +2739,7 @@ export default function App() {
               ) : (
                 <>
                   <button className="palette-item hl ghq-action" onClick={() => void doCommit()}>
+                    <span className="cicon" style={{ "--icon": `url("${cloudUploadIcon}")` } as React.CSSProperties} />
                     提交并推送
                     <span className="hint">Enter</span>
                   </button>
