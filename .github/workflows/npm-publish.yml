@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: npm-publish-${{ github.ref }}
@@ -28,7 +29,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          registry-url: https://registry.npmjs.org
+      - name: Upgrade npm for trusted publishing
+        run: npm install --global npm@latest
       - run: npm ci
       - run: npm run build:lib
       - id: package
@@ -47,6 +49,4 @@ jobs:
           fi
       - name: Publish ${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}
         if: steps.package.outputs.publish == 'true'
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
