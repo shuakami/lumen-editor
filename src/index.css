@@ -571,7 +571,7 @@ html[data-theme="dark"] .gh-modal {
   font-size: 10px; color: #7c7cec; border: 1px solid #7c7cec66;
   border-radius: 4px; padding: 0 4px; line-height: 14px;
 }
-.history-sha { flex: none; align-self: center; font-family: var(--mono, monospace); font-size: 11px; color: var(--fg-3); }
+.history-sha { flex: none; align-self: center; font-size: 11px; color: var(--fg-3); }
 .history-more {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
   background: none; border: none; border-radius: 6px; padding: 7px;
