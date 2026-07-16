@@ -65,7 +65,8 @@ const indentFold = foldService.of((state, from) => {
 });
  
 /** CodeMirror extensions are immutable and safe to share across editor views. */
-const EDITOR_SETUP: Extension[] = [
+function buildSetup(completions: boolean): Extension[] {
+  return [
     breakpointGutter(),
     ctrlClickJump(),
     lineNumbers(),
@@ -81,7 +82,7 @@ const EDITOR_SETUP: Extension[] = [
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     bracketMatching(),
     closeBrackets(),
-    autocompletion(),
+    ...(completions ? [autocompletion()] : []),
     rectangularSelection(),
     crosshairCursor(),
     highlightActiveLine(),
@@ -93,12 +94,16 @@ const EDITOR_SETUP: Extension[] = [
       ...searchKeymap,
       ...historyKeymap,
       ...foldKeymap,
-      ...completionKeymap,
+      ...(completions ? completionKeymap : []),
       ...lintKeymap,
     ]),
-];
+  ];
+}
+
+const EDITOR_SETUP = buildSetup(true);
+const EDITOR_SETUP_NO_COMPLETIONS = buildSetup(false);
 
 /** basicSetup equivalent, with a VS Code-style chevron fold gutter. */
-export function editorSetup(): Extension[] {
-  return EDITOR_SETUP;
+export function editorSetup(options?: { completions?: boolean }): Extension[] {
+  return options?.completions === false ? EDITOR_SETUP_NO_COMPLETIONS : EDITOR_SETUP;
 }

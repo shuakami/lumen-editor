@@ -24,6 +24,8 @@ interface EditorProps {
   dark: boolean;
   onDocChange: (fileId: string, doc: string) => void;
   onCursor: (info: CursorInfo) => void;
+  /** Set to false to disable autocompletion and suggestion popups. */
+  completions?: boolean;
 }
  
 const docCache = new Map<string, string>();
@@ -82,7 +84,7 @@ export function openGotoLine(fileId: string): boolean {
   return true;
 }
 
-export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCursor }: EditorProps) {
+export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCursor, completions = true }: EditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeCompartment = useRef(new Compartment());
@@ -90,6 +92,8 @@ export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark,
   callbacks.current.onDocChange = onDocChange;
   callbacks.current.onCursor = onCursor;
   const darkRef = useRef(dark);
+  const completionsRef = useRef(completions);
+  completionsRef.current = completions;
  
   useEffect(() => {
     const host = hostRef.current;
@@ -111,7 +115,7 @@ export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark,
       state: EditorState.create({
         doc,
         extensions: [
-          editorSetup(),
+          editorSetup({ completions: completionsRef.current }),
           keymap.of([indentWithTab]),
           indentUnit.of("    "),
           languageFor(filename).extensions(),
