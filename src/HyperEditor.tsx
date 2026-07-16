@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { EditorView } from "codemirror";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { EditorState, Compartment, StateEffect, type Extension } from "@codemirror/state";
 import {
   keymap,
   lineNumbers,
@@ -8,12 +8,12 @@ import {
   highlightActiveLine,
   highlightActiveLineGutter,
   highlightSpecialChars,
+  ViewPlugin,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, indentOnInput, indentUnit } from "@codemirror/language";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
-import { csharpLanguage } from "./editor/csharp";
 import { smoothCaret } from "./editor/caret";
 import { editorTheme } from "./editor/theme";
 import type { CursorInfo } from "./Editor";
@@ -23,6 +23,19 @@ const LINES_PER_CLASS = 20;
 const CHUNK = 10_000;
 const CHUNKS = HYPER_COUNT / CHUNK;
 const WINDOW_CHUNKS = 3;
+
+let csharpLanguagePromise: Promise<Extension> | null = null;
+const deferredCsharpLanguage = ViewPlugin.define((view) => {
+  let active = true;
+  csharpLanguagePromise ??= import("./editor/csharp").then((module) => module.csharpLanguage);
+  void csharpLanguagePromise.then(
+    (language) => {
+      if (active) view.dispatch({ effects: StateEffect.appendConfig.of(language) });
+    },
+    (error: unknown) => console.error("Failed to load HyperEditor C# support", error)
+  );
+  return { destroy: () => { active = false; } };
+});
  
 /** Deterministic generated C# source: line i of a 10M-line partial class file. */
 export function generatedLine(i: number): string {
@@ -163,7 +176,7 @@ export function HyperEditor({ dark, onCursor }: HyperEditorProps) {
       highlightSelectionMatches(),
       keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
       indentUnit.of("    "),
-      csharpLanguage,
+      deferredCsharpLanguage,
       smoothCaret(),
       themeCompartment.current.of(editorTheme(darkRef.current)),
       EditorView.updateListener.of((update) => {

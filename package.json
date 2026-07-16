@@ -1,6 +1,6 @@
 {
   "name": "lumenedit",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "description": "Lumen — embeddable code editor, GitHub sync engine, local history and smart preloading as a reusable library",
   "license": "MIT",
@@ -8,13 +8,29 @@
     "type": "git",
     "url": "git+https://github.com/shuakami/lumen-editor.git"
   },
-  "main": "./dist-lib/lumen.js",
-  "module": "./dist-lib/lumen.js",
+  "main": "./dist-lib/index.js",
+  "module": "./dist-lib/index.js",
   "types": "./dist-lib/types/lib.d.ts",
   "exports": {
     ".": {
       "types": "./dist-lib/types/lib.d.ts",
-      "import": "./dist-lib/lumen.js"
+      "import": "./dist-lib/index.js"
+    },
+    "./editor": {
+      "types": "./dist-lib/types/entries/editor.d.ts",
+      "import": "./dist-lib/editor.js"
+    },
+    "./github": {
+      "types": "./dist-lib/types/entries/github.d.ts",
+      "import": "./dist-lib/github.js"
+    },
+    "./sync": {
+      "types": "./dist-lib/types/entries/sync.d.ts",
+      "import": "./dist-lib/sync.js"
+    },
+    "./preload": {
+      "types": "./dist-lib/types/entries/preload.d.ts",
+      "import": "./dist-lib/preload.js"
     },
     "./package.json": "./package.json"
   },
@@ -61,21 +77,18 @@
     "@codemirror/search": "^6.5.10",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.5",
-    "@fontsource/maple-mono": "^5.2.5",
-    "@hyperscroll/core": "^0.1.0",
-    "@lezer/highlight": "^1.2.1",
-    "codemirror": "^6.0.1",
-    "dompurify": "^3.4.12",
-    "marked": "^18.0.6",
-    "material-icon-theme": "^5.36.1",
-    "seti-icons": "^0.0.4"
+    "@lezer/highlight": "^1.2.1"
   },
   "devDependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "@fontsource/maple-mono": "^5.2.5",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
+    "dompurify": "^3.4.12",
+    "marked": "^18.0.6",
+    "material-icon-theme": "^5.36.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "~5.7.2",
     "vite": "^6.2.0"
   }

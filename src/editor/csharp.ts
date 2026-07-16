@@ -1,7 +1,7 @@
 import { StreamLanguage, syntaxTree } from "@codemirror/language";
 import { csharp } from "@codemirror/legacy-modes/mode/clike";
 import { cpp } from "@codemirror/lang-cpp";
-import { Decoration, ViewPlugin, ViewUpdate, type DecorationSet } from "@codemirror/view";
+import { Decoration, ViewPlugin, ViewUpdate, type DecorationSet, type EditorView } from "@codemirror/view";
 import {
   autocompletion,
   completeFromList,
@@ -12,7 +12,6 @@ import {
 } from "@codemirror/autocomplete";
 import { hoverTooltip } from "@codemirror/view";
 import { linter, type Diagnostic } from "@codemirror/lint";
-import type { EditorView } from "codemirror";
 import type { Extension } from "@codemirror/state";
 import { smoothCaret } from "./caret";
  

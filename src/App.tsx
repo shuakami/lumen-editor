@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Editor, getCachedDoc, setCachedDoc, revealLine, openFindPanel, openGotoLine, type CursorInfo } from "./Editor";
 import { HyperEditor, HYPER_COUNT } from "./HyperEditor";
 import { SAMPLE_FILES, type SampleFile } from "./samples";
@@ -11,8 +11,6 @@ import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
 import { Preloader, type PreloadTarget } from "./preload";
 import { brainScore, brainRecordOpen, brainStats, brainSuccessors } from "./preload-brain";
 import { Loader } from "./Loader";
-import { marked } from "marked";
-import DOMPurify from "dompurify";
 import colorModeIcon from "./assets/codicons/color-mode.svg";
 import searchIcon from "./assets/codicons/search.svg";
 import arrowRightIcon from "./assets/codicons/arrow-right.svg";
@@ -47,6 +45,24 @@ interface Command {
   loc?: string;
   snippet?: string;
   run: () => void;
+}
+
+type MarkdownRenderer = (source: string) => string;
+
+let markdownRendererPromise: Promise<MarkdownRenderer> | null = null;
+
+function loadMarkdownRenderer(): Promise<MarkdownRenderer> {
+  if (!markdownRendererPromise) {
+    markdownRendererPromise = Promise.all([import("marked"), import("dompurify")])
+      .then(([{ marked }, { default: DOMPurify }]) =>
+        (source: string) => DOMPurify.sanitize(marked.parse(source, { async: false }) as string)
+      )
+      .catch((error: unknown) => {
+        markdownRendererPromise = null;
+        throw error;
+      });
+  }
+  return markdownRendererPromise;
 }
 
 function highlightMatch(text: string, q: string): React.ReactNode {
@@ -165,6 +181,34 @@ function pushRecent(repo: string, branch: string): RecentRepo[] {
   return out;
 }
 
+interface CursorStore {
+  getSnapshot: () => CursorInfo;
+  subscribe: (listener: () => void) => () => void;
+  set: (cursor: CursorInfo) => void;
+}
+
+function createCursorStore(): CursorStore {
+  let current: CursorInfo = { line: 1, col: 1, length: 0, selections: 1 };
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => current,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    set: (next) => {
+      if (next.line === current.line && next.col === current.col && next.length === current.length && next.selections === current.selections) return;
+      current = next;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+function CursorPosition({ store, locale = false }: { store: CursorStore; locale?: boolean }) {
+  const cursor = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  return <span className="status-item">行 {locale ? cursor.line.toLocaleString() : cursor.line}，列 {cursor.col}</span>;
+}
+
 function relTime(iso: string): string {
   if (!iso) return "";
   const d = Date.now() - new Date(iso).getTime();
@@ -178,7 +222,9 @@ function relTime(iso: string): string {
 export default function App() {
   const [openIds, setOpenIds] = useState<string[]>(HAS_SAVED_REPO ? [] : ["program", "hyper"]);
   const [activeId, setActiveId] = useState(HAS_SAVED_REPO ? "" : "program");
-  const [cursor, setCursor] = useState<CursorInfo>({ line: 1, col: 1, length: 0, selections: 1 });
+  const cursorStoreRef = useRef<CursorStore | null>(null);
+  cursorStoreRef.current ??= createCursorStore();
+  const cursorStore = cursorStoreRef.current;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [hlIndex, setHlIndex] = useState(0);
@@ -232,6 +278,7 @@ export default function App() {
   const [ghLoadedTick, setGhLoadedTick] = useState(0);
   const [commitError, setCommitError] = useState("");
   const [mdPreviewIds, setMdPreviewIds] = useState<Set<string>>(new Set());
+  const [markdownRenderer, setMarkdownRenderer] = useState<MarkdownRenderer | null>(null);
   const preloader = useRef<Preloader | null>(null);
   const [ghImages, setGhImages] = useState<Map<string, string>>(new Map());
   const [ghBins, setGhBins] = useState<Map<string, { url: string; size: number }>>(new Map());
@@ -1971,14 +2018,26 @@ export default function App() {
                 <button
                   className="icon-btn"
                   title={mdPreviewIds.has(active.id) ? "返回编辑" : "Markdown 预览"}
-                  onClick={() =>
-                    setMdPreviewIds((s) => {
+                  onPointerEnter={() => { void loadMarkdownRenderer(); }}
+                  onFocus={() => { void loadMarkdownRenderer(); }}
+                  onClick={() => {
+                    if (mdPreviewIds.has(active.id)) {
+                      setMdPreviewIds((s) => {
+                        const n = new Set(s);
+                        n.delete(active.id);
+                        return n;
+                      });
+                      return;
+                    }
+                    void loadMarkdownRenderer().then((renderer) => {
+                      setMarkdownRenderer(() => renderer);
+                      setMdPreviewIds((s) => {
                       const n = new Set(s);
-                      if (n.has(active.id)) n.delete(active.id);
-                      else n.add(active.id);
+                      n.add(active.id);
                       return n;
-                    })
-                  }
+                      });
+                    }, (error: unknown) => console.error("Failed to load Markdown preview", error));
+                  }}
                 >
                   <span className="cicon" style={{ "--icon": `url("${openPreviewIcon}")` } as React.CSSProperties} />
                 </button>
@@ -2057,15 +2116,15 @@ export default function App() {
               <div className="bin-size">二进制文件 · {fmtSize(ghBins.get(active.id)!.size)}</div>
               <a className="bin-download" href={ghBins.get(active.id)!.url} download={active.name}>下载</a>
             </div>
-          ) : fileExt(active.name) === "md" && mdPreviewIds.has(active.id) ? (
+          ) : fileExt(active.name) === "md" && mdPreviewIds.has(active.id) && markdownRenderer ? (
             <div
               className="md-preview"
               dangerouslySetInnerHTML={{
-                __html: DOMPurify.sanitize(marked.parse(getCachedDoc(active.id, active.content), { async: false }) as string),
+                __html: markdownRenderer(getCachedDoc(active.id, active.content)),
               }}
             />
           ) : active.hyper ? (
-            <HyperEditor dark={dark} onCursor={setCursor} />
+            <HyperEditor dark={dark} onCursor={cursorStore.set} />
           ) : (
             <Editor
               key={active.id}
@@ -2075,7 +2134,7 @@ export default function App() {
               dark={dark}
               onDocChange={onDocChange}
               onCursor={(c) => {
-                setCursor(c);
+                cursorStore.set(c);
                 cursorMap.current.set(active.id, { line: c.line, col: c.col });
               }}
             />
@@ -2191,7 +2250,7 @@ export default function App() {
                     <a className="bin-download" href={ghBins.get(sf.id)!.url} download={sf.name}>下载</a>
                   </div>
                 ) : sf.hyper ? (
-                  <HyperEditor dark={dark} onCursor={setCursor} />
+                  <HyperEditor dark={dark} onCursor={cursorStore.set} />
                 ) : (
                   <Editor
                     key={`split-${sf.id}`}
@@ -2201,7 +2260,7 @@ export default function App() {
                     dark={dark}
                     onDocChange={onDocChange}
                     onCursor={(c) => {
-                      setCursor(c);
+                      cursorStore.set(c);
                       cursorMap.current.set(sf.id, { line: c.line, col: c.col });
                     }}
                   />
@@ -2443,7 +2502,7 @@ export default function App() {
         <span className="status-spacer" />
         {active?.hyper ? (
           <>
-            <span className="status-item">行 {cursor.line.toLocaleString()}，列 {cursor.col}</span>
+            <CursorPosition store={cursorStore} locale />
             <span className="status-item">{HYPER_COUNT.toLocaleString()} 行</span>
             <span className="status-item">Spaces: 4</span>
             <span className="status-item">UTF-8</span>
@@ -2451,7 +2510,7 @@ export default function App() {
           </>
         ) : active ? (
           <>
-            <span className="status-item">行 {cursor.line}，列 {cursor.col}</span>
+            <CursorPosition store={cursorStore} />
             <span className="status-item">Spaces: 4</span>
             <span className="status-item">UTF-8</span>
             <span className="status-item">{languageFor(active.name).label}</span>

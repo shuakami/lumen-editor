@@ -4,12 +4,13 @@
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "declarationMap": true,
+    "declarationMap": false,
     "allowImportingTsExtensions": false,
     "outDir": "dist-lib/types"
   },
   "include": [
     "src/lib.ts",
+    "src/entries",
     "src/Editor.tsx",
     "src/HyperEditor.tsx",
     "src/Loader.tsx",

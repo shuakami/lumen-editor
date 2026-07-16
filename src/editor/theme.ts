@@ -1,13 +1,12 @@
-import { EditorView } from "codemirror";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { EditorView } from "@codemirror/view";
+import {
+  HighlightStyle,
+  syntaxHighlighting,
+  type Language,
+  type TagStyle,
+} from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import type { Extension } from "@codemirror/state";
-import { jsonLanguage } from "@codemirror/lang-json";
-import { yamlLanguage } from "@codemirror/lang-yaml";
-import { cssLanguage } from "@codemirror/lang-css";
-import { htmlLanguage } from "@codemirror/lang-html";
-import { xmlLanguage } from "@codemirror/lang-xml";
-import { markdownLanguage } from "@codemirror/lang-markdown";
  
 function chrome(colors: {
   bg: string;
@@ -143,68 +142,6 @@ const darkHighlight: Extension[] = [
     { tag: t.contentSeparator, color: "#82d2ce" },
     { tag: t.invalid, color: "#f14c4c" },
   ])),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.propertyName, t.definition(t.propertyName)], color: "#aaa0fa" },
-        { tag: [t.string], color: "#e394dc" },
-        { tag: [t.bool, t.null], color: "#82d2ce" },
-      ],
-      { scope: jsonLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.propertyName, t.definition(t.propertyName)], color: "#87c3ff" },
-        { tag: [t.string], color: "#e394dc" },
-      ],
-      { scope: yamlLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.propertyName], color: "#aaa0fa" },
-        { tag: [t.className], color: "#ebc88d" },
-        { tag: [t.tagName], color: "#87c3ff" },
-        { tag: [t.unit], color: "#e394dc" },
-        { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: "#ebc88d" },
-      ],
-      { scope: cssLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.tagName], color: "#87c3ff" },
-        { tag: [t.attributeName], color: "#aaa0fa" },
-        { tag: [t.attributeValue], color: "#e394dc" },
-        { tag: [t.angleBracket], color: "#f0f0f0bd" },
-      ],
-      { scope: htmlLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.tagName], color: "#a8cc7c" },
-        { tag: [t.attributeName], color: "#aaa0fa" },
-        { tag: [t.attributeValue], color: "#e394dc" },
-        { tag: [t.angleBracket], color: "#f0f0f0bd" },
-      ],
-      { scope: xmlLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.processingInstruction, t.punctuation], color: "#f0f0f099" },
-        { tag: [t.list], color: "#d6d6dd" },
-      ],
-      { scope: markdownLanguage }
-    )
-  ),
 ];
  
 const lightHighlight: Extension[] = [
@@ -244,69 +181,97 @@ const lightHighlight: Extension[] = [
     { tag: t.contentSeparator, color: "#141414bd" },
     { tag: t.invalid, color: "#cf2d56" },
   ])),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.propertyName, t.definition(t.propertyName)], color: "#1f8a65" },
-        { tag: [t.string], color: "#9e94d5" },
-        { tag: [t.bool, t.null], color: "#db704b" },
-      ],
-      { scope: jsonLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.propertyName, t.definition(t.propertyName)], color: "#1f8a65" },
-        { tag: [t.string], color: "#9e94d5" },
-      ],
-      { scope: yamlLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.propertyName], color: "#9e94d5" },
-        { tag: [t.className], color: "#206595" },
-        { tag: [t.tagName], color: "#6f9ba6" },
-        { tag: [t.unit], color: "#d06ba6" },
-        { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: "#b8448b" },
-      ],
-      { scope: cssLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.tagName], color: "#206595" },
-        { tag: [t.attributeName], color: "#6049b3" },
-        { tag: [t.attributeValue], color: "#9e94d5" },
-        { tag: [t.angleBracket], color: "#141414bd" },
-      ],
-      { scope: htmlLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.tagName], color: "#1f8a65" },
-        { tag: [t.attributeName], color: "#6049b3" },
-        { tag: [t.attributeValue], color: "#9e94d5" },
-        { tag: [t.angleBracket], color: "#141414bd" },
-      ],
-      { scope: xmlLanguage }
-    )
-  ),
-  syntaxHighlighting(
-    HighlightStyle.define(
-      [
-        { tag: [t.processingInstruction, t.punctuation], color: "#14141499" },
-        { tag: [t.list], color: "#141414" },
-      ],
-      { scope: markdownLanguage }
-    )
-  ),
 ];
+
+export type ScopedLanguageId = "json" | "yaml" | "css" | "html" | "xml" | "markdown";
+
+const scopedHighlights: Record<ScopedLanguageId, { dark: readonly TagStyle[]; light: readonly TagStyle[] }> = {
+  json: {
+    dark: [
+      { tag: [t.propertyName, t.definition(t.propertyName)], color: "#aaa0fa" },
+      { tag: [t.string], color: "#e394dc" },
+      { tag: [t.bool, t.null], color: "#82d2ce" },
+    ],
+    light: [
+      { tag: [t.propertyName, t.definition(t.propertyName)], color: "#1f8a65" },
+      { tag: [t.string], color: "#9e94d5" },
+      { tag: [t.bool, t.null], color: "#db704b" },
+    ],
+  },
+  yaml: {
+    dark: [
+      { tag: [t.propertyName, t.definition(t.propertyName)], color: "#87c3ff" },
+      { tag: [t.string], color: "#e394dc" },
+    ],
+    light: [
+      { tag: [t.propertyName, t.definition(t.propertyName)], color: "#1f8a65" },
+      { tag: [t.string], color: "#9e94d5" },
+    ],
+  },
+  css: {
+    dark: [
+      { tag: [t.propertyName], color: "#aaa0fa" },
+      { tag: [t.className], color: "#ebc88d" },
+      { tag: [t.tagName], color: "#87c3ff" },
+      { tag: [t.unit], color: "#e394dc" },
+      { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: "#ebc88d" },
+    ],
+    light: [
+      { tag: [t.propertyName], color: "#9e94d5" },
+      { tag: [t.className], color: "#206595" },
+      { tag: [t.tagName], color: "#6f9ba6" },
+      { tag: [t.unit], color: "#d06ba6" },
+      { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: "#b8448b" },
+    ],
+  },
+  html: {
+    dark: [
+      { tag: [t.tagName], color: "#87c3ff" },
+      { tag: [t.attributeName], color: "#aaa0fa" },
+      { tag: [t.attributeValue], color: "#e394dc" },
+      { tag: [t.angleBracket], color: "#f0f0f0bd" },
+    ],
+    light: [
+      { tag: [t.tagName], color: "#206595" },
+      { tag: [t.attributeName], color: "#6049b3" },
+      { tag: [t.attributeValue], color: "#9e94d5" },
+      { tag: [t.angleBracket], color: "#141414bd" },
+    ],
+  },
+  xml: {
+    dark: [
+      { tag: [t.tagName], color: "#a8cc7c" },
+      { tag: [t.attributeName], color: "#aaa0fa" },
+      { tag: [t.attributeValue], color: "#e394dc" },
+      { tag: [t.angleBracket], color: "#f0f0f0bd" },
+    ],
+    light: [
+      { tag: [t.tagName], color: "#1f8a65" },
+      { tag: [t.attributeName], color: "#6049b3" },
+      { tag: [t.attributeValue], color: "#9e94d5" },
+      { tag: [t.angleBracket], color: "#141414bd" },
+    ],
+  },
+  markdown: {
+    dark: [
+      { tag: [t.processingInstruction, t.punctuation], color: "#f0f0f099" },
+      { tag: [t.list], color: "#d6d6dd" },
+    ],
+    light: [
+      { tag: [t.processingInstruction, t.punctuation], color: "#14141499" },
+      { tag: [t.list], color: "#141414" },
+    ],
+  },
+};
+
+/** Keep parser-specific colors in the parser's lazy chunk. */
+export function scopedLanguageHighlight(id: ScopedLanguageId, language: Language): Extension[] {
+  const styles = scopedHighlights[id];
+  return [
+    syntaxHighlighting(HighlightStyle.define(styles.dark, { scope: language, themeType: "dark" })),
+    syntaxHighlighting(HighlightStyle.define(styles.light, { scope: language, themeType: "light" })),
+  ];
+}
  
 /** Like VS Code: hide the active-line highlight while a selection exists. */
 const activeLineSelectionFix = EditorView.updateListener.of((update) => {

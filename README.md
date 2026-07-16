@@ -43,6 +43,17 @@ Lumen is also a reusable library: the editor component, GitHub layer, sync engin
 npm install lumenedit
 ```
 
+Prefer the narrow entry point for production code so the editor and its language parsers are never downloaded by sync-only applications:
+
+```tsx
+import { Editor } from "lumenedit/editor";
+import { openRepo, commitFile } from "lumenedit/github";
+import { SyncEngine, loadLocalHistory } from "lumenedit/sync";
+import { Preloader } from "lumenedit/preload";
+```
+
+The root entry remains available for compatibility and supports tree shaking:
+
 ```tsx
 import {
   Editor,                      // CodeMirror 6 editor with doc cache / cursor restore / find panel
@@ -71,6 +82,18 @@ await engine.start();
 ```
 
 Peer dependencies: `react >= 18`. Everything else (CodeMirror packages) is a regular dependency and resolved automatically.
+
+### Production Size
+
+Measured with Vite 6 from a clean production install:
+
+| Import | Initial JS | gzip | Brotli | Initial chunks |
+| --- | ---: | ---: | ---: | ---: |
+| `lumenedit/sync` | 9.3 kB | 3.7 kB | 3.1 kB | 1 |
+| `lumenedit` (`SyncEngine` only) | 9.3 kB | 3.7 kB | 3.1 kB | 1 |
+| `lumenedit/editor` | 480.3 kB | 156.9 kB | 133.0 kB | lazy language chunks excluded |
+
+The npm tarball is about 48.7 kB (144.0 kB unpacked). A clean production dependency tree occupies about 15.9 MiB across 55 packages. Language parsers, C# support and Markdown preview dependencies load only when used.
 
 ## License
 

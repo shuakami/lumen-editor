@@ -1,33 +1,8 @@
-import type { Extension } from "@codemirror/state";
-import { StreamLanguage } from "@codemirror/language";
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { rust } from "@codemirror/lang-rust";
-import { go } from "@codemirror/lang-go";
-import { java } from "@codemirror/lang-java";
-import { json } from "@codemirror/lang-json";
-import { html } from "@codemirror/lang-html";
-import { css } from "@codemirror/lang-css";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { languages as codeLanguages } from "@codemirror/language-data";
-import { sql } from "@codemirror/lang-sql";
-import { xml } from "@codemirror/lang-xml";
-import { yaml } from "@codemirror/lang-yaml";
-import { php } from "@codemirror/lang-php";
-import { cpp } from "@codemirror/lang-cpp";
-import { shell } from "@codemirror/legacy-modes/mode/shell";
-import { ruby } from "@codemirror/legacy-modes/mode/ruby";
-import { lua } from "@codemirror/legacy-modes/mode/lua";
-import { swift } from "@codemirror/legacy-modes/mode/swift";
-import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
-import { diff } from "@codemirror/legacy-modes/mode/diff";
-import { toml } from "@codemirror/legacy-modes/mode/toml";
-import { perl } from "@codemirror/legacy-modes/mode/perl";
-import { r } from "@codemirror/legacy-modes/mode/r";
-import { clojure } from "@codemirror/legacy-modes/mode/clojure";
-import { powerShell } from "@codemirror/legacy-modes/mode/powershell";
-import { csharpExtensions, cExtensions, cppHighlightExtras } from "./csharp";
+import { StateEffect, type Extension } from "@codemirror/state";
+import { ViewPlugin } from "@codemirror/view";
+import type { StreamParser } from "@codemirror/language";
 import { smoothCaret } from "./caret";
+import { scopedLanguageHighlight } from "./theme";
  
 import csharpIcon from "material-icon-theme/icons/csharp.svg";
 import cIcon from "material-icon-theme/icons/c.svg";
@@ -73,9 +48,29 @@ export interface LanguageDef {
   icon: string;
   extensions: () => Extension[];
 }
- 
-function legacy(mode: Parameters<typeof StreamLanguage.define>[0]): () => Extension[] {
-  return () => [StreamLanguage.define(mode), smoothCaret()];
+
+type LanguageLoader = () => Promise<Extension[]>;
+
+const extensionCache = new Map<string, Promise<Extension[]>>();
+
+/** Load a parser after the editor mounts, then reuse the immutable extensions across views. */
+function deferred(id: string, loader: LanguageLoader): () => Extension[] {
+  const plugin = ViewPlugin.define((view) => {
+    let active = true;
+    let pending = extensionCache.get(id);
+    if (!pending) {
+      pending = loader();
+      extensionCache.set(id, pending);
+    }
+    void pending.then(
+      (extensions) => {
+        if (active) view.dispatch({ effects: StateEffect.appendConfig.of(extensions) });
+      },
+      (error: unknown) => console.error(`Failed to load ${id} language support`, error)
+    );
+    return { destroy: () => { active = false; } };
+  });
+  return () => [plugin];
 }
 
 const BAT_KEYWORDS = new Set([
@@ -86,7 +81,7 @@ const BAT_KEYWORDS = new Set([
   "equ", "neq", "lss", "leq", "gtr", "geq", "off", "on", "nul",
 ]);
 
-const batch: Parameters<typeof StreamLanguage.define>[0] = {
+const batch: StreamParser<unknown> = {
   name: "batch",
   token(stream) {
     if (stream.sol()) {
@@ -110,37 +105,37 @@ const batch: Parameters<typeof StreamLanguage.define>[0] = {
 };
  
 const DEFS: Array<{ def: LanguageDef; exts: string[]; filenames?: string[] }> = [
-  { def: { id: "csharp", label: "C#", icon: csharpIcon, extensions: csharpExtensions }, exts: ["cs", "csx", "cake"] },
-  { def: { id: "c", label: "C", icon: cIcon, extensions: cExtensions }, exts: ["c", "i"] },
-  { def: { id: "cpp", label: "C++", icon: cppIcon, extensions: () => [cpp(), cppHighlightExtras(), smoothCaret()] }, exts: ["cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx", "inl", "ipp", "ixx", "cu", "cuh"] },
-  { def: { id: "javascript", label: "JavaScript", icon: jsIcon, extensions: () => [javascript(), smoothCaret()] }, exts: ["js", "mjs", "cjs", "es6"] },
-  { def: { id: "javascriptreact", label: "JavaScript JSX", icon: reactIcon, extensions: () => [javascript({ jsx: true }), smoothCaret()] }, exts: ["jsx"] },
-  { def: { id: "typescript", label: "TypeScript", icon: tsIcon, extensions: () => [javascript({ typescript: true }), smoothCaret()] }, exts: ["ts", "mts", "cts"] },
-  { def: { id: "typescriptreact", label: "TypeScript JSX", icon: reactTsIcon, extensions: () => [javascript({ typescript: true, jsx: true }), smoothCaret()] }, exts: ["tsx"] },
-  { def: { id: "python", label: "Python", icon: pyIcon, extensions: () => [python(), smoothCaret()] }, exts: ["py", "pyi", "pyw", "ipy", "rpy"] },
-  { def: { id: "rust", label: "Rust", icon: rustIcon, extensions: () => [rust(), smoothCaret()] }, exts: ["rs"] },
-  { def: { id: "go", label: "Go", icon: goIcon, extensions: () => [go(), smoothCaret()] }, exts: ["go"] },
-  { def: { id: "java", label: "Java", icon: javaIcon, extensions: () => [java(), smoothCaret()] }, exts: ["java", "jav"] },
-  { def: { id: "json", label: "JSON", icon: jsonIcon, extensions: () => [json(), smoothCaret()] }, exts: ["json", "jsonc", "jsonl", "geojson", "webmanifest", "ipynb"] },
-  { def: { id: "html", label: "HTML", icon: htmlIcon, extensions: () => [html(), smoothCaret()] }, exts: ["html", "htm", "xhtml", "shtml"] },
-  { def: { id: "css", label: "CSS", icon: cssIcon, extensions: () => [css(), smoothCaret()] }, exts: ["css", "scss", "less"] },
-  { def: { id: "markdown", label: "Markdown", icon: mdIcon, extensions: () => [markdown({ base: markdownLanguage, codeLanguages }), smoothCaret()] }, exts: ["md", "markdown", "mdown", "mkd", "mdc"] },
-  { def: { id: "sql", label: "SQL", icon: sqlIcon, extensions: () => [sql(), smoothCaret()] }, exts: ["sql", "dsql"] },
-  { def: { id: "xml", label: "XML", icon: xmlIcon, extensions: () => [xml(), smoothCaret()] }, exts: ["xml", "xsd", "xsl", "svg", "csproj", "props", "targets"] },
-  { def: { id: "yaml", label: "YAML", icon: yamlIcon, extensions: () => [yaml(), smoothCaret()] }, exts: ["yaml", "yml"] },
-  { def: { id: "php", label: "PHP", icon: phpIcon, extensions: () => [php(), smoothCaret()] }, exts: ["php", "php4", "php5", "phtml"] },
-  { def: { id: "shellscript", label: "Shell Script", icon: shellIcon, extensions: legacy(shell) }, exts: ["sh", "bash", "zsh", "ksh", "fish", "bashrc", "zshrc"] },
-  { def: { id: "bat", label: "Batch", icon: shellIcon, extensions: legacy(batch) }, exts: ["bat", "cmd"] },
-  { def: { id: "powershell", label: "PowerShell", icon: powershellIcon, extensions: legacy(powerShell) }, exts: ["ps1", "psm1", "psd1"] },
-  { def: { id: "ruby", label: "Ruby", icon: rubyIcon, extensions: legacy(ruby) }, exts: ["rb", "rake", "gemspec", "ru"], filenames: ["gemfile", "rakefile"] },
-  { def: { id: "lua", label: "Lua", icon: luaIcon, extensions: legacy(lua) }, exts: ["lua"] },
-  { def: { id: "swift", label: "Swift", icon: swiftIcon, extensions: legacy(swift) }, exts: ["swift"] },
-  { def: { id: "dockerfile", label: "Dockerfile", icon: dockerIcon, extensions: legacy(dockerFile) }, exts: ["dockerfile", "containerfile"], filenames: ["dockerfile", "containerfile"] },
-  { def: { id: "diff", label: "Diff", icon: diffIcon, extensions: legacy(diff) }, exts: ["diff", "patch", "rej"] },
-  { def: { id: "toml", label: "TOML", icon: tomlIcon, extensions: legacy(toml) }, exts: ["toml"] },
-  { def: { id: "perl", label: "Perl", icon: perlIcon, extensions: legacy(perl) }, exts: ["pl", "pm", "pod", "psgi"] },
-  { def: { id: "r", label: "R", icon: rIcon, extensions: legacy(r) }, exts: ["r", "rhistory", "rprofile"] },
-  { def: { id: "clojure", label: "Clojure", icon: clojureIcon, extensions: legacy(clojure) }, exts: ["clj", "cljc", "cljs", "edn"] },
+  { def: { id: "csharp", label: "C#", icon: csharpIcon, extensions: deferred("csharp", async () => (await import("./csharp")).csharpExtensions()) }, exts: ["cs", "csx", "cake"] },
+  { def: { id: "c", label: "C", icon: cIcon, extensions: deferred("c", async () => (await import("./csharp")).cExtensions()) }, exts: ["c", "i"] },
+  { def: { id: "cpp", label: "C++", icon: cppIcon, extensions: deferred("cpp", async () => { const [lang, extra] = await Promise.all([import("@codemirror/lang-cpp"), import("./csharp")]); return [lang.cpp(), extra.cppHighlightExtras(), smoothCaret()]; }) }, exts: ["cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx", "inl", "ipp", "ixx", "cu", "cuh"] },
+  { def: { id: "javascript", label: "JavaScript", icon: jsIcon, extensions: deferred("javascript", async () => [(await import("@codemirror/lang-javascript")).javascript(), smoothCaret()]) }, exts: ["js", "mjs", "cjs", "es6"] },
+  { def: { id: "javascriptreact", label: "JavaScript JSX", icon: reactIcon, extensions: deferred("javascriptreact", async () => [(await import("@codemirror/lang-javascript")).javascript({ jsx: true }), smoothCaret()]) }, exts: ["jsx"] },
+  { def: { id: "typescript", label: "TypeScript", icon: tsIcon, extensions: deferred("typescript", async () => [(await import("@codemirror/lang-javascript")).javascript({ typescript: true }), smoothCaret()]) }, exts: ["ts", "mts", "cts"] },
+  { def: { id: "typescriptreact", label: "TypeScript JSX", icon: reactTsIcon, extensions: deferred("typescriptreact", async () => [(await import("@codemirror/lang-javascript")).javascript({ typescript: true, jsx: true }), smoothCaret()]) }, exts: ["tsx"] },
+  { def: { id: "python", label: "Python", icon: pyIcon, extensions: deferred("python", async () => [(await import("@codemirror/lang-python")).python(), smoothCaret()]) }, exts: ["py", "pyi", "pyw", "ipy", "rpy"] },
+  { def: { id: "rust", label: "Rust", icon: rustIcon, extensions: deferred("rust", async () => [(await import("@codemirror/lang-rust")).rust(), smoothCaret()]) }, exts: ["rs"] },
+  { def: { id: "go", label: "Go", icon: goIcon, extensions: deferred("go", async () => [(await import("@codemirror/lang-go")).go(), smoothCaret()]) }, exts: ["go"] },
+  { def: { id: "java", label: "Java", icon: javaIcon, extensions: deferred("java", async () => [(await import("@codemirror/lang-java")).java(), smoothCaret()]) }, exts: ["java", "jav"] },
+  { def: { id: "json", label: "JSON", icon: jsonIcon, extensions: deferred("json", async () => { const lang = await import("@codemirror/lang-json"); return [lang.json(), ...scopedLanguageHighlight("json", lang.jsonLanguage), smoothCaret()]; }) }, exts: ["json", "jsonc", "jsonl", "geojson", "webmanifest", "ipynb"] },
+  { def: { id: "html", label: "HTML", icon: htmlIcon, extensions: deferred("html", async () => { const lang = await import("@codemirror/lang-html"); return [lang.html(), ...scopedLanguageHighlight("html", lang.htmlLanguage), smoothCaret()]; }) }, exts: ["html", "htm", "xhtml", "shtml"] },
+  { def: { id: "css", label: "CSS", icon: cssIcon, extensions: deferred("css", async () => { const lang = await import("@codemirror/lang-css"); return [lang.css(), ...scopedLanguageHighlight("css", lang.cssLanguage), smoothCaret()]; }) }, exts: ["css", "scss", "less"] },
+  { def: { id: "markdown", label: "Markdown", icon: mdIcon, extensions: deferred("markdown", async () => { const [lang, data] = await Promise.all([import("@codemirror/lang-markdown"), import("@codemirror/language-data")]); return [lang.markdown({ base: lang.markdownLanguage, codeLanguages: data.languages }), ...scopedLanguageHighlight("markdown", lang.markdownLanguage), smoothCaret()]; }) }, exts: ["md", "markdown", "mdown", "mkd", "mdc"] },
+  { def: { id: "sql", label: "SQL", icon: sqlIcon, extensions: deferred("sql", async () => [(await import("@codemirror/lang-sql")).sql(), smoothCaret()]) }, exts: ["sql", "dsql"] },
+  { def: { id: "xml", label: "XML", icon: xmlIcon, extensions: deferred("xml", async () => { const lang = await import("@codemirror/lang-xml"); return [lang.xml(), ...scopedLanguageHighlight("xml", lang.xmlLanguage), smoothCaret()]; }) }, exts: ["xml", "xsd", "xsl", "svg", "csproj", "props", "targets"] },
+  { def: { id: "yaml", label: "YAML", icon: yamlIcon, extensions: deferred("yaml", async () => { const lang = await import("@codemirror/lang-yaml"); return [lang.yaml(), ...scopedLanguageHighlight("yaml", lang.yamlLanguage), smoothCaret()]; }) }, exts: ["yaml", "yml"] },
+  { def: { id: "php", label: "PHP", icon: phpIcon, extensions: deferred("php", async () => [(await import("@codemirror/lang-php")).php(), smoothCaret()]) }, exts: ["php", "php4", "php5", "phtml"] },
+  { def: { id: "shellscript", label: "Shell Script", icon: shellIcon, extensions: deferred("shellscript", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/shell")]); return [core.StreamLanguage.define(mode.shell), smoothCaret()]; }) }, exts: ["sh", "bash", "zsh", "ksh", "fish", "bashrc", "zshrc"] },
+  { def: { id: "bat", label: "Batch", icon: shellIcon, extensions: deferred("bat", async () => [(await import("@codemirror/language")).StreamLanguage.define(batch), smoothCaret()]) }, exts: ["bat", "cmd"] },
+  { def: { id: "powershell", label: "PowerShell", icon: powershellIcon, extensions: deferred("powershell", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/powershell")]); return [core.StreamLanguage.define(mode.powerShell), smoothCaret()]; }) }, exts: ["ps1", "psm1", "psd1"] },
+  { def: { id: "ruby", label: "Ruby", icon: rubyIcon, extensions: deferred("ruby", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/ruby")]); return [core.StreamLanguage.define(mode.ruby), smoothCaret()]; }) }, exts: ["rb", "rake", "gemspec", "ru"], filenames: ["gemfile", "rakefile"] },
+  { def: { id: "lua", label: "Lua", icon: luaIcon, extensions: deferred("lua", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/lua")]); return [core.StreamLanguage.define(mode.lua), smoothCaret()]; }) }, exts: ["lua"] },
+  { def: { id: "swift", label: "Swift", icon: swiftIcon, extensions: deferred("swift", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/swift")]); return [core.StreamLanguage.define(mode.swift), smoothCaret()]; }) }, exts: ["swift"] },
+  { def: { id: "dockerfile", label: "Dockerfile", icon: dockerIcon, extensions: deferred("dockerfile", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/dockerfile")]); return [core.StreamLanguage.define(mode.dockerFile), smoothCaret()]; }) }, exts: ["dockerfile", "containerfile"], filenames: ["dockerfile", "containerfile"] },
+  { def: { id: "diff", label: "Diff", icon: diffIcon, extensions: deferred("diff", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/diff")]); return [core.StreamLanguage.define(mode.diff), smoothCaret()]; }) }, exts: ["diff", "patch", "rej"] },
+  { def: { id: "toml", label: "TOML", icon: tomlIcon, extensions: deferred("toml", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/toml")]); return [core.StreamLanguage.define(mode.toml), smoothCaret()]; }) }, exts: ["toml"] },
+  { def: { id: "perl", label: "Perl", icon: perlIcon, extensions: deferred("perl", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/perl")]); return [core.StreamLanguage.define(mode.perl), smoothCaret()]; }) }, exts: ["pl", "pm", "pod", "psgi"] },
+  { def: { id: "r", label: "R", icon: rIcon, extensions: deferred("r", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/r")]); return [core.StreamLanguage.define(mode.r), smoothCaret()]; }) }, exts: ["r", "rhistory", "rprofile"] },
+  { def: { id: "clojure", label: "Clojure", icon: clojureIcon, extensions: deferred("clojure", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/clojure")]); return [core.StreamLanguage.define(mode.clojure), smoothCaret()]; }) }, exts: ["clj", "cljc", "cljs", "edn"] },
   { def: { id: "image", label: "图片", icon: imageIcon, extensions: () => [smoothCaret()] }, exts: ["png", "jpg", "jpeg", "gif", "ico", "webp", "bmp", "avif", "tiff"] },
   { def: { id: "font", label: "字体", icon: fontIcon, extensions: () => [smoothCaret()] }, exts: ["ttf", "otf", "woff", "woff2", "eot"] },
   { def: { id: "archive", label: "压缩包", icon: zipIcon, extensions: () => [smoothCaret()] }, exts: ["zip", "gz", "tar", "tgz", "rar", "7z", "jar"] },
@@ -151,6 +146,7 @@ const DEFS: Array<{ def: LanguageDef; exts: string[]; filenames?: string[] }> = 
  
 const byExt = new Map<string, LanguageDef>();
 const byFilename = new Map<string, LanguageDef>();
+const resolved = new Map<string, LanguageDef>();
 for (const { def, exts, filenames } of DEFS) {
   for (const e of exts) byExt.set(e, def);
   for (const f of filenames ?? []) byFilename.set(f, def);
@@ -165,12 +161,21 @@ export const PLAIN_TEXT: LanguageDef = {
  
 export function languageFor(filename: string): LanguageDef {
   const lower = filename.toLowerCase();
+  const cached = resolved.get(lower);
+  if (cached) return cached;
   const exact = byFilename.get(lower);
-  if (exact) return exact;
+  if (exact) {
+    resolved.set(lower, exact);
+    return exact;
+  }
   const parts = lower.split(".");
   for (let i = 1; i < parts.length; i++) {
     const def = byExt.get(parts.slice(i).join("."));
-    if (def) return def;
+    if (def) {
+      resolved.set(lower, def);
+      return def;
+    }
   }
+  resolved.set(lower, PLAIN_TEXT);
   return PLAIN_TEXT;
 }

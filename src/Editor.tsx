@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
-import { EditorView } from "codemirror";
+import { EditorView } from "@codemirror/view";
 import { editorSetup } from "./editor/setup";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState, Compartment, type Text } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
@@ -36,14 +36,13 @@ const viewRegistry = new Map<string, EditorView>();
 /** 同步引擎热更新打开中的文件：刷新文档缓存，并把新内容应用到已挂载的编辑器视图。 */
 export function setCachedDoc(fileId: string, doc: string): void {
   docCache.set(fileId, doc);
-  for (const [key, view] of viewRegistry) {
-    if (key !== fileId || view.state.doc.toString() === doc) continue;
-    const pos = Math.min(view.state.selection.main.head, doc.length);
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: doc },
-      selection: { anchor: pos },
-    });
-  }
+  const view = viewRegistry.get(fileId);
+  if (!view || view.state.doc.toString() === doc) return;
+  const pos = Math.min(view.state.selection.main.head, doc.length);
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: doc },
+    selection: { anchor: pos },
+  });
 }
 
 /** 跳转到指定文件的某一行（编辑器未挂载时自动重试）。 */
@@ -93,6 +92,16 @@ export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCurs
     const host = hostRef.current;
     if (!host) return;
     const doc = docCache.get(fileId) ?? initialDoc;
+    let pendingDoc: Text | null = null;
+    let docFrame = 0;
+    const flushDoc = () => {
+      docFrame = 0;
+      if (!pendingDoc) return;
+      const text = pendingDoc.toString();
+      pendingDoc = null;
+      docCache.set(fileId, text);
+      callbacks.current.onDocChange(fileId, text);
+    };
     const view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -105,9 +114,8 @@ export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCurs
           themeCompartment.current.of(editorTheme(darkRef.current)),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
-              const text = update.state.doc.toString();
-              docCache.set(fileId, text);
-              callbacks.current.onDocChange(fileId, text);
+              pendingDoc = update.state.doc;
+              if (!docFrame) docFrame = window.requestAnimationFrame(flushDoc);
             }
             if (update.selectionSet || update.docChanged) {
               const sel = update.state.selection;
@@ -135,6 +143,8 @@ export function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCurs
       selections: 1,
     });
     return () => {
+      if (docFrame) window.cancelAnimationFrame(docFrame);
+      flushDoc();
       view.destroy();
       if (viewRegistry.get(fileId) === view) viewRegistry.delete(fileId);
       viewRef.current = null;

@@ -64,9 +64,8 @@ const indentFold = foldService.of((state, from) => {
   return { from: line.to, to: state.doc.line(end).to };
 });
  
-/** basicSetup equivalent, with a VS Code-style chevron fold gutter. */
-export function editorSetup(): Extension[] {
-  return [
+/** CodeMirror extensions are immutable and safe to share across editor views. */
+const EDITOR_SETUP: Extension[] = [
     breakpointGutter(),
     ctrlClickJump(),
     lineNumbers(),
@@ -97,5 +96,9 @@ export function editorSetup(): Extension[] {
       ...completionKeymap,
       ...lintKeymap,
     ]),
-  ];
+];
+
+/** basicSetup equivalent, with a VS Code-style chevron fold gutter. */
+export function editorSetup(): Extension[] {
+  return EDITOR_SETUP;
 }
