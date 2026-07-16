@@ -46,6 +46,8 @@ export interface CommitTransaction {
   content: string;
   message: string;
   createdAt: number;
+  /** 远端冲突（409/422）：挂起保留内容，等待用户重新保存触发合并 */
+  conflict?: boolean;
 }
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
@@ -120,6 +122,26 @@ function idbDelete(store: string, key: string): Promise<void> {
   );
 }
 
+/** 单个 IDB 事务内删旧记录 + 写新记录，保证原子性。 */
+function idbReplace(store: string, deleteKeys: string[], putKey: string, value: unknown): Promise<void> {
+  return openDb().then(
+    (db) =>
+      new Promise<void>((resolve) => {
+        if (!db) return resolve();
+        try {
+          const tx = db.transaction(store, "readwrite");
+          const os = tx.objectStore(store);
+          for (const k of deleteKeys) os.delete(k);
+          os.put(value, putKey);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        } catch {
+          resolve();
+        }
+      })
+  );
+}
+
 function idbGetAll<T>(store: string): Promise<T[]> {
   return openDb().then(
     (db) =>
@@ -170,7 +192,7 @@ export function saveSnapshot(snap: RepoSnapshot): Promise<void> {
   return idbPut(META_STORE, snap.key, snap);
 }
 
-export type SyncState = "synced" | "syncing" | "pending" | "offline";
+export type SyncState = "synced" | "syncing" | "pending" | "offline" | "conflict";
 
 export interface SyncEvents {
   onDeltas: (deltas: GhFileDelta[], newHeadSha: string) => void;
@@ -178,6 +200,8 @@ export interface SyncEvents {
   onTransactionError: (tx: CommitTransaction, error: Error, willRetry: boolean) => void;
   onState: (state: SyncState, pendingCount: number) => void;
   onInfo: (text: string) => void;
+  /** 提交遇远端冲突：事务已挂起保留（内容不丢），需要用户处理后重新保存 */
+  onConflict?: (tx: CommitTransaction, error: Error) => void;
 }
 
 /**
@@ -188,12 +212,23 @@ export class SyncEngine {
   private stopped = false;
   private headSha: string;
   private queue: CommitTransaction[] = [];
+  private conflicts: CommitTransaction[] = [];
   private flushing = false;
   private polling = false;
+  /** 智能轮询：连续无变更逐步拉长间隔，页面隐藏降频，429 强制休眠 */
+  private idlePolls = 0;
+  private rateLimitedUntil = 0;
   private onlineHandler = () => {
     this.emitState();
     void this.flush();
     void this.pollOnce();
+  };
+  private visibilityHandler = () => {
+    if (!document.hidden) {
+      this.idlePolls = 0;
+      window.clearTimeout(this.timer);
+      void this.pollOnce().finally(() => this.schedule());
+    }
   };
 
   constructor(
@@ -204,6 +239,7 @@ export class SyncEngine {
   ) {
     this.headSha = headSha;
     window.addEventListener("online", this.onlineHandler);
+    document.addEventListener("visibilitychange", this.visibilityHandler);
   }
 
   get key(): string {
@@ -217,7 +253,12 @@ export class SyncEngine {
   /** 引导时重放缓存事务（对应 LSE 的 loadPersistedTransactions）。 */
   async start(): Promise<void> {
     const all = await idbGetAll<CommitTransaction>(TX_STORE);
-    this.queue = all.filter((t) => t.repoKey === this.key).sort((a, b) => a.createdAt - b.createdAt);
+    const mine = all.filter((t) => t.repoKey === this.key).sort((a, b) => a.createdAt - b.createdAt);
+    this.conflicts = mine.filter((t) => t.conflict);
+    this.queue = mine.filter((t) => !t.conflict);
+    if (this.conflicts.length > 0) {
+      this.events.onInfo(`同步引擎：${this.conflicts.length} 个提交因远端冲突挂起，内容已保留，重新保存即可基于最新版本重提`);
+    }
     if (this.queue.length > 0) {
       this.events.onInfo(`同步引擎：发现 ${this.queue.length} 个未完成的提交事务，正在重放…`);
       void this.flush();
@@ -230,6 +271,7 @@ export class SyncEngine {
     this.stopped = true;
     window.clearTimeout(this.timer);
     window.removeEventListener("online", this.onlineHandler);
+    document.removeEventListener("visibilitychange", this.visibilityHandler);
   }
 
   /** 入队一个提交事务：先持久化再执行，离线也不丢。 */
@@ -240,17 +282,23 @@ export class SyncEngine {
       repoKey: this.key,
       createdAt: Date.now(),
     };
-    // 同一文件的旧事务被新事务覆盖（同 LSE 的 batch 合并语义）
-    const stale = this.queue.filter((t) => t.path === full.path);
-    for (const s of stale) void idbDelete(TX_STORE, s.id);
+    // 同一文件的旧事务（含冲突挂起的）被新事务覆盖（同 LSE 的 batch 合并语义），
+    // 删旧 + 写新在同一个 IDB 事务内完成，避免并发 enqueue 时队列与磁盘不一致
+    const stale = [...this.queue, ...this.conflicts].filter((t) => t.path === full.path);
     this.queue = [...this.queue.filter((t) => t.path !== full.path), full];
-    await idbPut(TX_STORE, full.id, full);
+    this.conflicts = this.conflicts.filter((t) => t.path !== full.path);
+    await idbReplace(TX_STORE, stale.map((s) => s.id), full.id, full);
     this.emitState();
     void this.flush();
   }
 
   hasPendingFor(path: string): boolean {
-    return this.queue.some((t) => t.path === path);
+    return this.queue.some((t) => t.path === path) || this.conflicts.some((t) => t.path === path);
+  }
+
+  /** 因远端冲突挂起的事务（内容已保留）。 */
+  get conflictedTransactions(): CommitTransaction[] {
+    return [...this.conflicts];
   }
 
   /** 串行执行事务队列（对应 LSE 的 executingTransactions）。 */
@@ -268,11 +316,25 @@ export class SyncEngine {
         this.events.onTransactionDone(tx, r);
       } catch (e) {
         const err = e as Error & { status?: number };
-        const permanent = err.status === 401 || err.status === 403 || err.status === 404 || err.status === 422;
-        if (permanent) {
+        if (err.status === 409 || err.status === 422) {
+          // 远端冲突：绝不丢内容。事务标记为冲突并继续持久化，从发送队列移到挂起区，
+          // 由 UI 提示用户基于最新远端内容处理后重新保存（重新保存会覆盖挂起事务）
+          this.queue.shift();
+          const held: CommitTransaction = { ...tx, conflict: true };
+          this.conflicts.push(held);
+          await idbPut(TX_STORE, held.id, held);
+          this.events.onConflict?.(held, err);
+          this.events.onInfo(`同步引擎：${tx.path} 与远端冲突，提交已挂起（内容保留），同步最新版本后重新保存即可重提`);
+        } else if (err.status === 401 || err.status === 404) {
           this.queue.shift();
           await idbDelete(TX_STORE, tx.id);
           this.events.onTransactionError(tx, err, false);
+        } else if (err.status === 403 || err.status === 429) {
+          // rate limit / 滥用保护：保留事务，强制休眠后重试
+          this.rateLimitedUntil = Date.now() + 5 * 60_000;
+          this.events.onTransactionError(tx, err, true);
+          this.events.onInfo("同步引擎：触发 GitHub 限流，休眠 5 分钟后自动重试");
+          break;
         } else {
           this.events.onTransactionError(tx, err, true);
           break; // 网络类错误：保留事务，等待下次机会
@@ -283,16 +345,28 @@ export class SyncEngine {
     this.emitState();
   }
 
+  /** 下一轮轮询间隔：基础间隔 × 退避倍数，页面隐藏时至少 1 分钟，限流期内直接睡到解除。 */
+  private nextInterval(): number {
+    let ms = this.intervalMs;
+    if (this.idlePolls > 3) ms = Math.min(this.intervalMs * Math.pow(1.5, this.idlePolls - 3), 60_000);
+    if (document.hidden) ms = Math.max(ms, 60_000);
+    const rl = this.rateLimitedUntil - Date.now();
+    if (rl > 0) ms = Math.max(ms, rl);
+    return ms;
+  }
+
   private schedule(): void {
     if (this.stopped) return;
+    window.clearTimeout(this.timer);
     this.timer = window.setTimeout(() => {
       void this.pollOnce().finally(() => this.schedule());
-    }, this.intervalMs);
+    }, this.nextInterval());
   }
 
   /** 拉取增量：head 变化时应用 delta packets 并推进本地版本号。 */
   async pollOnce(): Promise<void> {
     if (this.stopped || this.polling || !navigator.onLine) return;
+    if (Date.now() < this.rateLimitedUntil) return;
     this.polling = true;
     try {
       const remote = await getHeadSha(this.ref);
@@ -300,11 +374,19 @@ export class SyncEngine {
         const deltas = await compareCommits(this.ref, this.headSha, remote);
         const base = this.headSha;
         this.headSha = remote;
+        this.idlePolls = 0;
         this.events.onDeltas(deltas, remote);
         this.events.onInfo(`同步引擎：${base.slice(0, 7)} → ${remote.slice(0, 7)}，${deltas.length} 个文件变更`);
+      } else {
+        this.idlePolls++;
       }
-    } catch {
-      /* 轮询失败静默，下轮重试 */
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      if (err.status === 403 || err.status === 429) {
+        this.rateLimitedUntil = Date.now() + 5 * 60_000;
+        this.events.onInfo("同步引擎：轮询触发 GitHub 限流，休眠 5 分钟");
+      }
+      /* 其余轮询失败静默，下轮重试 */
     } finally {
       this.polling = false;
       if (this.queue.length > 0) void this.flush();
@@ -320,14 +402,24 @@ export class SyncEngine {
     return this.headSha;
   }
 
+  /** 手动刷新：重置退避，立即强制拉一次。 */
+  forcePoll(): Promise<void> {
+    this.idlePolls = 0;
+    this.rateLimitedUntil = 0;
+    window.clearTimeout(this.timer);
+    return this.pollOnce().finally(() => this.schedule());
+  }
+
   private emitState(): void {
     const state: SyncState = !navigator.onLine
       ? "offline"
-      : this.flushing
-        ? "syncing"
-        : this.queue.length > 0
-          ? "pending"
-          : "synced";
-    this.events.onState(state, this.queue.length);
+      : this.conflicts.length > 0
+        ? "conflict"
+        : this.flushing
+          ? "syncing"
+          : this.queue.length > 0
+            ? "pending"
+            : "synced";
+    this.events.onState(state, this.queue.length + this.conflicts.length);
   }
 }

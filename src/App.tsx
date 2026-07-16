@@ -626,6 +626,11 @@ export default function App() {
         },
         onState: (state, pending) => setSyncStatus({ state, pending }),
         onInfo: (text) => appendLog([{ kind: "info", text }]),
+        onConflict: (tx, err) => {
+          setConsoleOpen(true);
+          setConsoleTab("logs");
+          appendLog([{ kind: "err", text: `GitHub：${tx.path} 与远端冲突（${err.message}），提交已挂起、内容已保留；同步到最新版本后重新保存即可重提` }]);
+        },
       });
       engine.current = e;
       void e.start();
@@ -1502,7 +1507,7 @@ export default function App() {
                 <button className="mini-btn" title="新建文件夹" onClick={newFolder}>
                   <span className="cicon" style={{ "--icon": `url("${newFolderIcon}")` } as React.CSSProperties} />
                 </button>
-                <button className="mini-btn" title="刷新资源管理器" onClick={() => { setFiles((fs) => [...fs]); void engine.current?.pollOnce(); }}>
+                <button className="mini-btn" title="刷新资源管理器" onClick={() => { setFiles((fs) => [...fs]); void engine.current?.forcePoll(); }}>
                   <span className="cicon" style={{ "--icon": `url("${refreshIcon}")` } as React.CSSProperties} />
                 </button>
                 <button className="mini-btn" title="全部折叠" onClick={collapseAll}>
@@ -2114,6 +2119,8 @@ export default function App() {
                 </>
               ) : syncStatus.state === "pending" ? (
                 `⇡ ${syncStatus.pending} 待提交`
+              ) : syncStatus.state === "conflict" ? (
+                `⚠ 冲突 · ${syncStatus.pending} 个提交挂起`
               ) : syncStatus.state === "offline" ? (
                 `离线${syncStatus.pending > 0 ? ` · ${syncStatus.pending} 个事务待重放` : ""}`
               ) : (

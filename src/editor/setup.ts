@@ -25,6 +25,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } 
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { lintKeymap } from "@codemirror/lint";
 import { breakpointGutter } from "./breakpoints";
+import { findPanel } from "./findpanel";
 import { ctrlClickJump } from "./jump";
  
 const CHEVRON =
@@ -86,6 +87,7 @@ export function editorSetup(): Extension[] {
     crosshairCursor(),
     highlightActiveLine(),
     highlightSelectionMatches(),
+    findPanel(),
     keymap.of([
       ...closeBracketsKeymap,
       ...defaultKeymap,

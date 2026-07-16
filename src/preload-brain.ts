@@ -50,15 +50,24 @@ const state = load();
 let lastOpened: string | null = null;
 let saveTimer: number | undefined;
 
+function persist(): void {
+  prune();
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state));
+  } catch {
+    /* 存储满时忽略 */
+  }
+}
+
+/** 持久化放在空闲时间片执行，序列化/写盘不抢占输入与渲染。 */
 function scheduleSave(): void {
   if (saveTimer !== undefined) return;
   saveTimer = window.setTimeout(() => {
     saveTimer = undefined;
-    prune();
-    try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-    } catch {
-      /* 存储满时忽略 */
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(() => persist(), { timeout: 2000 });
+    } else {
+      persist();
     }
   }, 500);
 }
@@ -139,6 +148,17 @@ export function brainScore(path: string, size?: number): number {
   return s;
 }
 
+/** 蓄水池抽样：目录下所有未打开文件长期来看有均等机会成为负样本。 */
+function sampleNegatives(pool: string[], k: number): string[] {
+  if (pool.length <= k) return pool;
+  const out = pool.slice(0, k);
+  for (let i = k; i < pool.length; i++) {
+    const j = Math.floor(Math.random() * (i + 1));
+    if (j < k) out[j] = pool[i];
+  }
+  return out;
+}
+
 /** 用户真实打开文件时上报。negatives 传同目录里没被打开的路径用作负样本。 */
 export function brainRecordOpen(path: string, wasLoaded: boolean, negatives: string[] = []): void {
   const lower = path.toLowerCase();
@@ -147,7 +167,7 @@ export function brainRecordOpen(path: string, wasLoaded: boolean, negatives: str
   else state.misses++;
 
   sgd(features(path), 1, wasLoaded ? LR : LR * 2);
-  for (const n of negatives.slice(0, 3)) {
+  for (const n of sampleNegatives(negatives, 3)) {
     if (n.toLowerCase() !== lower) sgd(features(n), 0, LR * 0.3);
   }
 

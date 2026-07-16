@@ -864,15 +864,73 @@ html[data-theme="dark"] .cm-scroller::-webkit-scrollbar-thumb:hover { background
 .cm-diagnosticSource::before { content: "("; }
 .cm-diagnosticSource::after { content: ")"; }
  
-.cm-panels {
+/* —— VS Code 风格查找/替换悬浮组件 —— */
+.cm-panels.cm-panels-top {
+  background: transparent !important; color: var(--fg) !important;
+  border: none !important; font-family: var(--font-ui);
+  position: absolute; top: 0; right: 14px; left: auto; z-index: 30;
+  width: auto;
+}
+.lmf {
+  display: flex; align-items: stretch;
+  background: var(--surface, var(--bg));
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  padding: 4px 6px 4px 0;
+  font-size: 12px;
+}
+.lmf .lmf-toggle {
+  width: 18px; border-radius: 0 4px 4px 0; margin-right: 2px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; color: var(--fg-3); cursor: pointer;
+}
+.lmf .lmf-toggle:hover { background: var(--surface-2); color: var(--fg); }
+.lmf-main { display: flex; flex-direction: column; gap: 4px; }
+.lmf-row { display: flex; align-items: center; gap: 3px; }
+.lmf-input-wrap {
+  position: relative; display: flex; align-items: center;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  width: 240px;
+}
+.lmf-input-wrap:focus-within { border-color: var(--accent, #4d9de0); }
+.lmf-input {
+  flex: 1; min-width: 0; background: transparent; border: none; outline: none;
+  color: var(--fg); font: inherit; padding: 4px 6px;
+}
+.lmf-opts { display: flex; align-items: center; gap: 1px; padding-right: 3px; }
+.lmf button.lmf-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; flex: none;
+  background: transparent; border: none; border-radius: 4px;
+  color: var(--fg-2, var(--fg)); cursor: pointer;
+}
+.lmf button.lmf-btn:hover { background: var(--surface-2); }
+.lmf button.lmf-btn svg { width: 14px; height: 14px; }
+.lmf button.lmf-opt { width: 20px; height: 20px; color: var(--fg-3); }
+.lmf button.lmf-opt.on {
+  background: color-mix(in srgb, var(--accent, #4d9de0) 28%, transparent);
+  color: var(--fg);
+  outline: 1px solid var(--accent, #4d9de0);
+}
+.lmf-count {
+  min-width: 56px; text-align: left; padding: 0 4px;
+  color: var(--fg-3); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.lmf-count.none { color: #d13438; }
+.lmf-replace-row .lmf-input-wrap { width: 240px; }
+
+/* 底部面板（跳转到行等）保持简洁样式 */
+.cm-panels.cm-panels-bottom {
   background: var(--bg) !important; color: var(--fg) !important;
   border: none !important; font-family: var(--font-ui);
 }
-.cm-panels input {
+.cm-panels.cm-panels-bottom input {
   background: var(--surface); border: 1px solid var(--line) !important;
   color: var(--fg); border-radius: 6px; outline: none;
 }
-.cm-panels button {
+.cm-panels.cm-panels-bottom button {
   background: var(--surface-2) !important; border: none !important;
   color: var(--fg) !important; border-radius: 6px;
   background-image: none !important; cursor: pointer; padding: 3px 8px;
