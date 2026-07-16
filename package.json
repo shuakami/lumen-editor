@@ -1,13 +1,41 @@
 {
   "name": "lumen-editor",
-  "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
+  "description": "Lumen — embeddable code editor, GitHub sync engine, local history and smart preloading as a reusable library",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shuakami/lumen-editor.git"
+  },
+  "main": "./dist-lib/lumen.js",
+  "module": "./dist-lib/lumen.js",
+  "types": "./dist-lib/types/lib.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist-lib/types/lib.d.ts",
+      "import": "./dist-lib/lumen.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist-lib",
+    "README.md"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:lib": "vite build -c vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "prepare": "npm run build:lib",
     "lint": "eslint .",
     "preview": "vite preview"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.6",
@@ -40,11 +68,11 @@
     "dompurify": "^3.4.12",
     "marked": "^18.0.6",
     "material-icon-theme": "^5.36.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
     "seti-icons": "^0.0.4"
   },
   "devDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",

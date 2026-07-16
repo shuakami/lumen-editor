@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": true,
+    "allowImportingTsExtensions": false,
+    "outDir": "dist-lib/types"
+  },
+  "include": [
+    "src/lib.ts",
+    "src/Editor.tsx",
+    "src/HyperEditor.tsx",
+    "src/Loader.tsx",
+    "src/github.ts",
+    "src/syncengine.ts",
+    "src/ghcache.ts",
+    "src/preload.ts",
+    "src/preload-brain.ts",
+    "src/editor",
+    "src/vite-env.d.ts"
+  ]
+}

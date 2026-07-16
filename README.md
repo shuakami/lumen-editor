@@ -35,6 +35,43 @@ Or just open the [live demo][demo-link] — then `File → Open GitHub Repositor
 > \[!NOTE]
 > A personal access token (`ghp_…`) is only needed for private repositories or committing. It is stored in your browser's localStorage and never sent anywhere except api.github.com.
 
+## Use as a Library
+
+Lumen is also a reusable library: the editor component, GitHub layer, sync engine, local history and smart preloader can each be imported independently.
+
+```bash
+npm install shuakami/lumen-editor   # install from GitHub (builds dist-lib automatically)
+```
+
+```tsx
+import {
+  Editor,                      // CodeMirror 6 editor with doc cache / cursor restore / find panel
+  openRepo, fetchBlob,         // GitHub API layer (pure functions)
+  listCommits, commitFile,     // commit history + auto three-way-merge commits
+  SyncEngine, repoKey,         // incremental sync engine with offline transaction queue
+  loadLocalHistory,            // IndexedDB local edit history
+  Preloader, brainScore,       // smart preloading with a learned open-model
+} from "lumen-editor";
+
+const tree = await openRepo("shuakami", "lumen-editor");
+
+const engine = new SyncEngine(tree.ref, tree.headSha, {
+  onDeltas: (deltas, head) => console.log("remote changed", deltas),
+  onTransactionDone: (tx, r) => console.log("committed", tx.path, r.newSha),
+  onTransactionError: console.error,
+  onState: (state, pending) => console.log(state, pending),
+  onInfo: console.log,
+});
+await engine.start();
+```
+
+```tsx
+<Editor fileId="gh:src/index.ts" filename="index.ts" initialDoc={code} dark
+        onDocChange={(id) => {/* persist draft */}} />
+```
+
+Peer dependencies: `react >= 18`. Everything else (CodeMirror packages) is a regular dependency and resolved automatically.
+
 ## License
 
 [MIT][license-link]
