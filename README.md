@@ -81,19 +81,19 @@ await engine.start();
         onDocChange={(id) => {/* persist draft */}} />
 ```
 
-Peer dependencies: `react >= 18`. Everything else (CodeMirror packages) is a regular dependency and resolved automatically.
+Peer dependencies: `react >= 18` and `react-dom >= 18`. The minified CodeMirror and Lezer runtime is compiled into Lumen; consumers do not install their source packages, documentation or source maps.
 
 ### Production Size
 
-Measured with Vite 6 from a clean production install:
+Measured from the packed npm artifact with esbuild code splitting; React is external to the editor benchmark:
 
 | Import | Initial JS | gzip | Brotli | Initial chunks |
 | --- | ---: | ---: | ---: | ---: |
-| `lumenedit/sync` | 9.5 kB | 3.8 kB | 3.2 kB | 1 |
-| `lumenedit` (`SyncEngine` only) | 9.5 kB | 3.8 kB | 3.2 kB | 1 |
-| `lumenedit/editor` | 485.8 kB | 159.2 kB | 134.8 kB | lazy language chunks excluded |
+| `lumenedit/sync` | 9.0 kB | 3.3 kB | 2.9 kB | 1 |
+| `lumenedit` (`SyncEngine` only) | 9.5 kB | 3.7 kB | 3.2 kB | 2 |
+| `lumenedit/editor` | 472.6 kB | 154.1 kB | 131.1 kB | 2; lazy languages excluded |
 
-The npm tarball is about 49.0 kB (145.0 kB unpacked). A clean production dependency tree occupies about 15.9 MiB across 55 packages. Language parsers, C# support and Markdown preview dependencies load only when used.
+The npm tarball is about 710.1 kB and installs 2.2 MB across 152 package files. Lumen has no production dependency tree beyond the React peer dependencies supplied by the host application. All 126 minified editor/runtime chunks total 2.22 MB before transport compression; language parsers remain lazy and load only when used.
 
 ## License
 

@@ -1,6 +1,6 @@
 {
   "name": "lumenedit",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "type": "module",
   "description": "Lumen — embeddable code editor, GitHub sync engine, local history and smart preloading as a reusable library",
   "license": "MIT",
@@ -53,7 +53,7 @@
     "react": ">=18",
     "react-dom": ">=18"
   },
-  "dependencies": {
+  "devDependencies": {
     "@codemirror/autocomplete": "^6.18.6",
     "@codemirror/commands": "^6.8.1",
     "@codemirror/lang-cpp": "^6.0.2",
@@ -77,9 +77,7 @@
     "@codemirror/search": "^6.5.10",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.5",
-    "@lezer/highlight": "^1.2.1"
-  },
-  "devDependencies": {
+    "@lezer/highlight": "^1.2.1",
     "@fontsource/maple-mono": "^5.2.5",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
