@@ -16,6 +16,10 @@
 .cm-editor ::selection { background: transparent; }
 .cm-editor.cm-has-selection .cm-activeLine { background: transparent !important; }
 
+/* loader (Loader component ships with the package) */
+@keyframes loader-rotate { to { transform: rotate(360deg); } }
+.loader-spin { animation: loader-rotate 0.8s steps(10) infinite; }
+
 /* smooth caret */
 .cm-smooth-caret {
   position: absolute; left: 0; top: 0; width: 1.5px;

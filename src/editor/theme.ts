@@ -49,6 +49,7 @@ function chrome(colors: {
         border: "none",
         fontFamily: '"Maple Mono NF CN", "Maple Mono", "JetBrains Mono", ui-monospace, monospace',
         fontSize: "calc(var(--code-size, 13.5px) - 1.5px)",
+        lineHeight: "calc(var(--code-size, 13.5px) * var(--code-lh, 1.6))",
         paddingLeft: "10px",
       },
       ".cm-activeLineGutter": { backgroundColor: "transparent", color: colors.gutterActive },
