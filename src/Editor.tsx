@@ -6,6 +6,7 @@ import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { languageFor } from "./editor/languages";
+import { importCompletions } from "./editor/imports";
 import { editorTheme } from "./editor/theme";
 import { openSearchPanel, gotoLine } from "@codemirror/search";
 import { ensureEditorCss } from "./editor/injectcss";
@@ -119,6 +120,9 @@ export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark,
           keymap.of([indentWithTab]),
           indentUnit.of("    "),
           languageFor(filename).extensions(),
+          completionsRef.current
+            ? importCompletions(languageFor(filename).id, filename)
+            : [],
           themeCompartment.current.of(editorTheme(darkRef.current)),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {

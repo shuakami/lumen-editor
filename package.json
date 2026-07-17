@@ -1,6 +1,6 @@
 {
   "name": "lumenedit",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "type": "module",
   "description": "Lumen — embeddable code editor, GitHub sync engine, local history and smart preloading as a reusable library",
   "license": "MIT",

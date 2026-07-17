@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Editor, getCachedDoc, setCachedDoc, revealLine, openFindPanel, openGotoLine, type CursorInfo } from "./Editor";
+import { setWorkspaceFiles } from "./editor/imports";
 import { HyperEditor, HYPER_COUNT } from "./HyperEditor";
 import { SAMPLE_FILES, type SampleFile } from "./samples";
 import { languageFor } from "./editor/languages";
@@ -358,6 +359,9 @@ export default function App() {
   }, []);
  
   const filesById = useMemo(() => new Map(files.map((file) => [file.id, file])), [files]);
+  useEffect(() => {
+    setWorkspaceFiles(files.map((f) => (f.dir ? `${f.dir}/${f.name}` : f.name)));
+  }, [files]);
   const active = openIds.includes(activeId) ? filesById.get(activeId) : undefined;
   const paletteRef = useRef<HTMLDivElement>(null);
 
@@ -2177,7 +2181,7 @@ export default function App() {
             <Editor
               key={active.id}
               fileId={active.id}
-              filename={active.name}
+              filename={active.dir ? `${active.dir}/${active.name}` : active.name}
               initialDoc={active.content}
               dark={dark}
               onDocChange={onDocChange}
@@ -2300,7 +2304,7 @@ export default function App() {
                   <Editor
                     key={`split-${sf.id}`}
                     fileId={sf.id}
-                    filename={sf.name}
+                    filename={sf.dir ? `${sf.dir}/${sf.name}` : sf.name}
                     initialDoc={sf.content}
                     dark={dark}
                     onDocChange={onDocChange}

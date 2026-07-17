@@ -14,3 +14,4 @@ export { editorTheme } from "../editor/theme";
 export { languageFor, type LanguageDef } from "../editor/languages";
 export { applyCodeScale } from "../editor/scale";
 export { isRunnable, runCode, runCommandLabel } from "../editor/run";
+export { importCompletions, hasImportCompletions, setWorkspaceFiles } from "../editor/imports";
