@@ -238,6 +238,40 @@ export async function listCommits(
   }));
 }
 
+/** 提交详情：完整 message、作者、日期、父提交。 */
+export interface GhCommitDetail {
+  sha: string;
+  message: string;
+  author: string;
+  avatar?: string;
+  date: string;
+  parents: string[];
+  stats?: { additions: number; deletions: number };
+  files: Array<{ filename: string; status: string; additions: number; deletions: number; patch?: string }>;
+}
+
+/** 单个提交的详情与逐文件 diff（含 patch 文本）。 */
+export async function fetchCommitDetail(ref: GhRepoRef, sha: string): Promise<GhCommitDetail> {
+  const r = await gh<{
+    sha: string;
+    commit: { message: string; author?: { name?: string; date?: string } };
+    author?: { login?: string; avatar_url?: string } | null;
+    parents: Array<{ sha: string }>;
+    stats?: { additions: number; deletions: number };
+    files?: Array<{ filename: string; status: string; additions: number; deletions: number; patch?: string }>;
+  }>(`/repos/${ref.owner}/${ref.repo}/commits/${sha}`, ref.token);
+  return {
+    sha: r.sha,
+    message: r.commit.message,
+    author: r.author?.login || r.commit.author?.name || "unknown",
+    avatar: r.author?.avatar_url,
+    date: r.commit.author?.date ?? "",
+    parents: r.parents.map((p) => p.sha),
+    stats: r.stats ? { additions: r.stats.additions, deletions: r.stats.deletions } : undefined,
+    files: r.files ?? [],
+  };
+}
+
 /** 读取某个提交处的文件内容（文件历史查看）。 */
 export async function fetchFileAtCommit(ref: GhRepoRef, path: string, commitSha: string): Promise<string> {
   const f = await gh<{ content: string; encoding: string }>(

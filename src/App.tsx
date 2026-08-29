@@ -6,7 +6,7 @@ import { SAMPLE_FILES, type SampleFile } from "./samples";
 import { languageFor } from "./editor/languages";
 import { applyCodeScale } from "./editor/scale";
 import { isRunnable, runCode, runCommandLabel } from "./editor/run";
-import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, listCommits, fetchFileAtCommit, searchCode, type GhTree, type GhBranch, type GhFileDelta, type GhCodeHit, type GhCommit } from "./github";
+import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, listCommits, fetchFileAtCommit, fetchCommitDetail, searchCode, type GhTree, type GhBranch, type GhFileDelta, type GhCodeHit, type GhCommit, type GhCommitDetail } from "./github";
 import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, recordLocalVersion, loadLocalHistory, type LocalVersion, type SyncState } from "./syncengine";
 import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
 import { Preloader, type PreloadTarget } from "./preload";
@@ -218,6 +218,87 @@ function pushRecent(repo: string, branch: string): RecentRepo[] {
   return out;
 }
 
+interface DiffRow {
+  kind: "ctx" | "add" | "del" | "hunk" | "skip";
+  number: string;
+  text: string;
+  hidden: number;
+}
+
+/** 解析 GitHub patch 文本为带行号的 diff 行。 */
+function parsePatch(patch?: string, context = 3): DiffRow[] {
+  if (!patch) return [];
+  const rows: DiffRow[] = [];
+  let oldN = 0;
+  let newN = 0;
+  for (const raw of patch.split("\n")) {
+    const hm = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hm) {
+      oldN = Number(hm[1]);
+      newN = Number(hm[2]);
+      rows.push({ kind: "hunk", number: "", text: raw, hidden: 0 });
+      continue;
+    }
+    if (raw.startsWith("+") && !raw.startsWith("+++")) rows.push({ kind: "add", number: String(newN++), text: raw.slice(1), hidden: 0 });
+    else if (raw.startsWith("-") && !raw.startsWith("---")) rows.push({ kind: "del", number: String(oldN++), text: raw.slice(1), hidden: 0 });
+    else if (raw.startsWith("\\")) rows.push({ kind: "ctx", number: "", text: raw, hidden: 0 });
+    else rows.push({ kind: "ctx", number: String(newN++), text: raw.startsWith(" ") ? raw.slice(1) : raw, hidden: 0 });
+  }
+  return collapseContext(rows, context);
+}
+
+/** 连续未修改行折叠：折叠数量并入相邻 hunk 的 hidden（改动附近保留 3 行上下文）。 */
+function collapseContext(rows: DiffRow[], context: number): DiffRow[] {
+  const KEEP = context;
+  const keep = new Array<boolean>(rows.length).fill(false);
+  rows.forEach((r, i) => {
+    if (r.kind === "ctx") return;
+    for (let j = Math.max(0, i - KEEP); j <= Math.min(rows.length - 1, i + KEEP); j++) keep[j] = true;
+  });
+  const out: DiffRow[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    if (keep[i]) {
+      out.push(rows[i]);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < rows.length && !keep[j]) j++;
+    if (out.length === 0) {
+      // hidden lines before the first hunk: attach to the hunk header itself
+      if (j < rows.length && rows[j].kind === "hunk") {
+        const h = rows[j];
+        out.push({ ...h, hidden: h.hidden + (j - i) });
+        j++;
+      }
+    } else if (j < rows.length && rows[j].kind === "hunk") {
+      const h = rows[j];
+      out.push({ ...h, hidden: h.hidden + (j - i) });
+      j++;
+    } else if (out.length > 0 && j < rows.length) {
+      out.push({ kind: "skip", number: "", text: "", hidden: j - i });
+    }
+    i = j;
+  }
+  return out;
+}
+/** 从 hunk 头提取新文件起始行号，如 "@@ -1081,7 +1081,10 @@" → 1081。 */
+function hunkStart(text: string): string {
+  const m = /\+(\d+)/.exec(text);
+  return m ? m[1] : "";
+}
+
+function syncLabel(status: { state: SyncState; pending: number }): string {
+  switch (status.state) {
+    case "syncing": return "正在同步远端变更";
+    case "pending": return `${status.pending} 个提交待推送`;
+    case "conflict": return `存在冲突 · ${status.pending} 个提交挂起`;
+    case "offline": return status.pending > 0 ? `离线 · ${status.pending} 个事务待重放` : "离线";
+    default: return "已同步到远端";
+  }
+}
+
 interface CursorStore {
   getSnapshot: () => CursorInfo;
   subscribe: (listener: () => void) => () => void;
@@ -266,7 +347,7 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [hlIndex, setHlIndex] = useState(0);
   const [dirty, setDirty] = useState<Set<string>>(new Set());
-  const [dark, setDark] = useState(false);
+  const [dark, setDark] = useState(() => localStorage.getItem("lumen.theme") === "dark");
   const [files, setFiles] = useState<SampleFile[]>(HAS_SAVED_REPO ? [] : SAMPLE_FILES);
   const [ghRestoring, setGhRestoring] = useState(HAS_SAVED_REPO);
   const [extraFolders, setExtraFolders] = useState<string[]>([]);
@@ -333,6 +414,9 @@ export default function App() {
   const [historyList, setHistoryList] = useState<GhCommit[] | null>(null);
   const [historyEnd, setHistoryEnd] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [commitDetail, setCommitDetail] = useState<GhCommitDetail | null>(null);
+  const [commitDetailLoading, setCommitDetailLoading] = useState(false);
+  const [commitExpand, setCommitExpand] = useState<Map<string, number>>(new Map());
   const [historyPreview, setHistoryPreview] = useState<null | { sha: string; content: string | null }>(null);
   const [historyLocal, setHistoryLocal] = useState<LocalVersion[] | null>(null);
   const historyCache = useRef(new Map<string, { list: GhCommit[]; end: boolean }>());
@@ -348,6 +432,7 @@ export default function App() {
     const root = document.documentElement;
     root.classList.add("theme-switching");
     root.dataset.theme = dark ? "dark" : "light";
+    localStorage.setItem("lumen.theme", dark ? "dark" : "light");
     const t = window.setTimeout(() => root.classList.remove("theme-switching"), 300);
     return () => window.clearTimeout(t);
   }, [dark]);
@@ -409,6 +494,19 @@ export default function App() {
     setOpenIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
     setActiveId(id);
   }, []);
+
+  /** 活动标签超出可视区时滚动标签栏使其可见 */
+  const tabstripRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const strip = tabstripRef.current;
+    if (!strip || !activeId) return;
+    const tab = strip.querySelector<HTMLDivElement>(`.tab[data-id="${CSS.escape(activeId)}"]`);
+    if (!tab) return;
+    const left = tab.offsetLeft;
+    const right = left + tab.offsetWidth;
+    if (left < strip.scrollLeft) strip.scrollTo({ left: Math.max(0, left - 24), behavior: "smooth" });
+    else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollTo({ left: right - strip.clientWidth + 24, behavior: "smooth" });
+  }, [activeId, openIds]);
 
   const loadGhFile = useCallback(
     (id: string) => {
@@ -1305,6 +1403,7 @@ export default function App() {
       setBranchMenuOpen(false);
       setHistoryFor({ path });
       setHistoryPreview(null);
+      setCommitDetail(null);
       setHistoryList(null);
       setHistoryEnd(false);
       setHistoryLocal(null);
@@ -1337,6 +1436,36 @@ export default function App() {
       }
     },
     [historyFor, appendLog]
+  );
+
+  const commitMdHtml = useMemo(() => {
+    const body = commitDetail?.message.split("\n").slice(2).join("\n");
+    if (!body || !markdownRenderer) return null;
+    try {
+      return markdownRenderer(body);
+    } catch {
+      return null;
+    }
+  }, [commitDetail, markdownRenderer]);
+
+  const loadCommitDetail = useCallback(
+    async (sha: string) => {
+      const tree = ghTreeRef.current;
+      if (!tree) return;
+      void loadMarkdownRenderer().then((renderer) => setMarkdownRenderer(() => renderer));
+      setCommitDetailLoading(true);
+      setCommitDetail(null);
+      setCommitExpand(new Map());
+      try {
+        const d = await fetchCommitDetail(tree.ref, sha);
+        setCommitDetail(d);
+      } catch (e) {
+        appendLog([{ kind: "err", text: `GitHub：读取提交详情失败 — ${(e as Error).message}` }]);
+      } finally {
+        setCommitDetailLoading(false);
+      }
+    },
+    [appendLog]
   );
 
   const restoreHistoryVersion = useCallback(() => {
@@ -1978,7 +2107,12 @@ export default function App() {
         <main className="main">
           <div className="editor-area">
           <div className="editor-col" style={splitId ? { flex: `${splitRatio} 1 0` } : undefined}>
-          <div className="tabstrip">
+          <div className="tabstrip" ref={tabstripRef} onWheel={(e) => {
+            if (e.deltaX !== 0 || e.deltaY === 0) return;
+            const strip = e.currentTarget;
+            if (strip.scrollWidth <= strip.clientWidth) return;
+            strip.scrollLeft += e.deltaY;
+          }}>
             {openIds
               .map((id) => filesById.get(id))
               .filter((f): f is SampleFile => Boolean(f))
@@ -1986,6 +2120,7 @@ export default function App() {
                 <div
                   key={f.id}
                   role="tab"
+                  data-id={f.id}
                   className={`tab${f.id === activeId ? " active" : ""}`}
                   draggable
                   onDragStart={(e) => {
@@ -2239,7 +2374,12 @@ export default function App() {
                   }
                 }}
               >
-                <div className="tabstrip">
+                <div className="tabstrip" onWheel={(e) => {
+                  if (e.deltaX !== 0 || e.deltaY === 0) return;
+                  const strip = e.currentTarget;
+                  if (strip.scrollWidth <= strip.clientWidth) return;
+                  strip.scrollLeft += e.deltaY;
+                }}>
                   {sf && (
                     <div
                       role="tab"
@@ -2523,7 +2663,14 @@ export default function App() {
               <span className="cicon status-cicon" style={{ "--icon": `url("${historyIcon}")` } as React.CSSProperties} />
               提交
             </button>
-            <span className="status-item sync-item" title="GitHub 超级同步引擎">
+            <span className="status-item sync-item">
+              <span className="sync-tooltip" aria-hidden="true">
+                <div className="sync-tt-title">GitHub 同步</div>
+                <div className="sync-tt-row"><span className="sync-tt-k">状态</span><span className="sync-tt-v">{syncLabel(syncStatus)}</span></div>
+                {ghTree && <div className="sync-tt-row"><span className="sync-tt-k">分支</span><span className="sync-tt-v">{ghTree.ref.owner}/{ghTree.ref.repo}@{ghTree.ref.branch}</span></div>}
+                {ghTree && <div className="sync-tt-row"><span className="sync-tt-k">版本</span><span className="sync-tt-v">{ghTree.headSha.slice(0, 7)}</span></div>}
+                {syncStatus.pending > 0 && <div className="sync-tt-row"><span className="sync-tt-k">待提交</span><span className="sync-tt-v">{syncStatus.pending} 个事务</span></div>}
+              </span>
               {syncStatus.state === "syncing" ? (
                 <>
                   <Loader size={11} /> 同步中…
@@ -2567,13 +2714,7 @@ export default function App() {
       {branchMenuOpen && ghTree && (
         <div className="ctx-overlay" onMouseDown={() => setBranchMenuOpen(false)}>
           <div className="branch-menu" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="branch-menu-title">
-              切换分支 — {ghTree.ref.owner}/{ghTree.ref.repo}
-              <button className="branch-menu-commits" onClick={() => openHistory()}>
-                <span className="cicon status-cicon" style={{ "--icon": `url("${historyIcon}")` } as React.CSSProperties} />
-                提交树
-              </button>
-            </div>
+            <div className="branch-menu-title">切换分支 — {ghTree.ref.owner}/{ghTree.ref.repo}</div>
             <div className="branch-menu-list">
               {branches === null ? (
                 <div className="branch-menu-empty">
@@ -2602,7 +2743,7 @@ export default function App() {
 
       {historyFor && ghTree && (
         <div className="ghq-overlay" onMouseDown={() => { setHistoryFor(null); setHistoryPreview(null); }}>
-          <div className={`history-modal${historyFor.path && historyPreview ? " with-preview" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
+          <div className={`history-modal${(historyFor.path && historyPreview) || (!historyFor.path && (commitDetail || commitDetailLoading)) ? " with-preview" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
             <div className="ghq-titlebar">
               <span className="ghq-titletext">
                 {historyFor.path ? `修改历史 · ${historyFor.path}` : `提交树 · ${ghTree.ref.owner}/${ghTree.ref.repo}@${ghTree.ref.branch}`}
@@ -2676,8 +2817,8 @@ export default function App() {
                     {historyList.map((c, i) => (
                       <button
                         key={c.sha}
-                        className={`history-item${historyPreview?.sha === c.sha ? " active" : ""}`}
-                        onClick={() => { if (historyFor.path) void previewHistoryVersion(c.sha); }}
+                        className={`history-item${commitDetail?.sha === c.sha ? " active" : ""}`}
+                        onClick={() => { if (!historyFor.path) void loadCommitDetail(c.sha); else void previewHistoryVersion(c.sha); }}
                       >
                         <span className="history-rail">
                           <span className={`history-dot${c.parents.length > 1 ? " merge" : ""}`} />
@@ -2714,6 +2855,91 @@ export default function App() {
                     <div className="branch-menu-empty"><Loader size={14} /> 正在读取历史版本…</div>
                   ) : (
                     <pre className="history-code">{historyPreview.content}</pre>
+                  )}
+                </div>
+              )}
+              {!historyFor.path && (commitDetail || commitDetailLoading) && (
+                <div className="commit-detail">
+                  {commitDetailLoading || !commitDetail ? (
+                    <div className="branch-menu-empty"><Loader size={14} /> 正在读取提交详情…</div>
+                  ) : (
+                    <>
+                      <div className="commit-detail-head">
+                        <img className="history-avatar lg" src={commitDetail.avatar ?? ""} alt="" />
+                        <div className="commit-detail-title">
+                          <div className="commit-detail-msg">{commitDetail.message.split("\n")[0]}</div>
+                          <div className="commit-detail-meta">
+                            {commitDetail.author} · {relTime(commitDetail.date)} · {commitDetail.sha.slice(0, 7)}
+                            {commitDetail.parents.length > 1 && <span className="history-mergetag">merge</span>}
+                          </div>
+                        </div>
+                        {commitDetail.stats && (
+                          <div className="commit-detail-stats">
+                            <span className="add">+{commitDetail.stats.additions}</span>
+                            <span className="del">−{commitDetail.stats.deletions}</span>
+                          </div>
+                        )}
+                      </div>
+                      {commitMdHtml && (
+                        <div className="commit-detail-body md" dangerouslySetInnerHTML={{ __html: commitMdHtml }} />
+                      )}
+                      <div className="commit-files">
+                        {commitDetail.files.map((f) => {
+                          const ctx = commitExpand.get(f.filename) ?? 3;
+                          const lines = parsePatch(f.patch, ctx);
+                          return (
+                          <details key={f.filename} className="commit-file">
+                            <summary className="commit-file-head">
+                              <span className={`commit-file-status ${f.status}`}>{f.status}</span>
+                              <span className="commit-file-name">{f.filename}</span>
+                              <span className="commit-file-meta">
+                                <span className="add">+{f.additions}</span>
+                                <span className="del">−{f.deletions}</span>
+                                {lines.length > 0 && <span className="commit-file-chev">▾</span>}
+                              </span>
+                            </summary>
+                            {lines.length > 0 ? (
+                              <div className="commit-diff">
+                                {lines.map((l, i) => (
+                                  l.kind === "hunk" ? (
+                                    <div key={i} className="diff-row hunk">
+                                      <span className="diff-hunktext">Line {hunkStart(l.text)}</span>
+                                      {l.hidden > 0 && (
+                                        <>
+                                          <button type="button" className="diff-expand" onClick={() => setCommitExpand((m) => new Map(m).set(f.filename, ctx + Math.min(5, l.hidden)))}>
+                                            ↑ Expand {Math.min(5, l.hidden)} lines
+                                          </button>
+                                          <button type="button" className="diff-expand" onClick={() => setCommitExpand((m) => new Map(m).set(f.filename, 10000))}>
+                                            All {l.hidden} lines
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  ) : l.kind === "skip" ? (
+                                    <div key={i} className="diff-skip">
+                                      <button type="button" className="diff-expand" onClick={() => setCommitExpand((m) => new Map(m).set(f.filename, ctx + Math.min(5, l.hidden)))}>
+                                        ↑ Expand {Math.min(5, l.hidden)} lines
+                                      </button>
+                                      <button type="button" className="diff-expand" onClick={() => setCommitExpand((m) => new Map(m).set(f.filename, 10000))}>
+                                        Expand all {l.hidden} lines
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div key={i} className={`diff-row ${l.kind}`}>
+                                      <span className="diff-num">{l.number}</span>
+                                      <span className="diff-text">{l.text}</span>
+                                    </div>
+                                  )
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="commit-patch empty">（二进制或超长文件，无文本 diff）</div>
+                            )}
+                          </details>
+                          );
+                        })}
+                      </div>
+                    </>
                   )}
                 </div>
               )}
