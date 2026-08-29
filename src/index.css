@@ -911,23 +911,18 @@ html[data-theme="dark"] .tabstrip:hover::-webkit-scrollbar-thumb { background: r
 }
 .empty-logo.sm { width: 44px; height: 44px; opacity: 0.55; }
 .empty-corner {
-  position: absolute; left: 24px; bottom: 20px;
-  display: flex; flex-direction: column; gap: 8px;
-  opacity: 0.75; user-select: none; pointer-events: none;
+  position: absolute; left: 28px; bottom: 24px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 7px;
+  opacity: 0.6; user-select: none; pointer-events: none;
 }
-.empty-corner-title { font-size: 11px; letter-spacing: 0.4em; color: var(--fg-3); font-weight: 600; margin-bottom: 2px; }
-.empty-corner-row { display: flex; align-items: center; gap: 0; }
-.empty-corner-ver { font-size: 11px; color: var(--fg-3); margin-top: 6px; letter-spacing: 0.05em; }
+.empty-corner-line { display: flex; align-items: baseline; gap: 12px; }
 .empty-key {
-  min-width: 22px; padding: 2px 7px;
-  border: 1px solid var(--line); border-bottom-width: 2px;
-  border-radius: 5px; font-size: 12px; line-height: 18px;
-  background: var(--surface); color: var(--fg);
-  font-family: var(--font-ui); font-weight: 500;
-  box-shadow: 0 1px 2px rgba(20, 20, 20, 0.06);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  color: var(--fg-2); letter-spacing: 0.04em;
+  min-width: 76px; text-align: right; font-variant-numeric: tabular-nums;
 }
-.empty-plus { color: var(--fg-3); font-size: 12px; margin: 0 2px; }
-.empty-desc { color: var(--fg-2); font-size: 13px; margin-left: 10px; }
+.empty-desc { color: var(--fg-3); font-size: 11.5px; }
+.empty-corner-ver { font-size: 10.5px; color: var(--fg-3); letter-spacing: 0.1em; margin-top: 4px; font-family: var(--font-ui); align-self: flex-end; }
 
 /* ---------- editor ---------- */
 .editor-pane {

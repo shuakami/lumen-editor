@@ -2343,10 +2343,9 @@ export default function App() {
             <div className="empty-pane">
               <div className="empty-logo" style={{ "--icon": `url("${logoGlyph}")` } as React.CSSProperties} />
               <div className="empty-corner">
-                <div className="empty-corner-title">LUMEN</div>
-                <div className="empty-corner-row"><span className="empty-key">Ctrl</span><span className="empty-plus">+</span><span className="empty-key">K</span><span className="empty-desc">命令面板</span></div>
-                <div className="empty-corner-row"><span className="empty-key">Ctrl</span><span className="empty-plus">+</span><span className="empty-key">P</span><span className="empty-desc">快速打开文件</span></div>
-                <div className="empty-corner-row"><span className="empty-key">Ctrl</span><span className="empty-plus">+</span><span className="empty-key">Alt</span><span className="empty-plus">+</span><span className="empty-key">N</span><span className="empty-desc">新建文件</span></div>
+                <div className="empty-corner-line"><span className="empty-key">Ctrl K</span><span className="empty-desc">命令面板</span></div>
+                <div className="empty-corner-line"><span className="empty-key">Ctrl P</span><span className="empty-desc">快速打开</span></div>
+                <div className="empty-corner-line"><span className="empty-key">Ctrl Alt N</span><span className="empty-desc">新建文件</span></div>
                 <div className="empty-corner-ver">v1.6.0</div>
               </div>
             </div>
@@ -2487,9 +2486,8 @@ export default function App() {
                 {!sf ? (
                   <div className="empty-pane">
                     <div className="empty-logo sm" style={{ "--icon": `url("${logoGlyph}")` } as React.CSSProperties} />
-                    <div className="empty-corner">
-                      <div className="empty-corner-row"><span className="empty-key">Ctrl</span><span className="empty-plus">+</span><span className="empty-key">\</span><span className="empty-desc">拆分编辑器</span></div>
-                    </div>
+                    <div className="empty-corner"><div className="empty-corner-line"><span className="empty-key">Ctrl \</span><span className="empty-desc">拆分编辑器</span></div></div>
+
                   </div>
                 ) : ghMeta.current.has(sf.id) && !ghMeta.current.get(sf.id)!.loaded ? (
                   <div className="loading-pane"><Loader size={22} /></div>
