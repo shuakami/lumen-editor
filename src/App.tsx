@@ -48,15 +48,41 @@ interface Command {
   run: () => void;
 }
 
-type MarkdownRenderer = (source: string) => string;
+type MarkdownRenderer = (source: string, mediaBase?: string) => string;
 
 let markdownRendererPromise: Promise<MarkdownRenderer> | null = null;
+
+const CALLOUT_TYPES = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"] as const;
+
+/** 把 GitHub 风格 [!NOTE]/[!TIP]/… callout blockquote 转成带配色的 alert 容器。 */
+/** 为每个代码块（pre）注入右上角复制按钮（在 sanitize 之后，不受白名单影响）。 */
+const COPY_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+function injectCopyButtons(html: string): string {
+  return html.replace(/<pre>/g, '<pre><button type="button" class="md-copy" aria-label="Copy code">' + COPY_ICON_SVG + '</button>');
+}
+
+function renderCallouts(html: string): string {
+  return html.replace(/<blockquote>\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(?:<br\s*\/?>)?/gi, (_m, typeRaw: string) => {
+    const type = typeRaw.toUpperCase();
+    const known = (CALLOUT_TYPES as readonly string[]).includes(type);
+    if (!known) return `<blockquote><p>[!${typeRaw}]`;
+    return `<div class="md-callout ${type.toLowerCase()}"><div class="md-callout-title">${typeRaw.charAt(0)}${typeRaw.slice(1).toLowerCase()}</div><p>`;
+  }).replace(/<\/blockquote>/g, "</div>");
+}
 
 function loadMarkdownRenderer(): Promise<MarkdownRenderer> {
   if (!markdownRendererPromise) {
     markdownRendererPromise = Promise.all([import("marked"), import("dompurify")])
       .then(([{ marked }, { default: DOMPurify }]) =>
-        (source: string) => DOMPurify.sanitize(marked.parse(source, { async: false }) as string)
+        (source: string, mediaBase?: string) => {
+          let html = marked.parse(source, { async: false }) as string;
+          if (mediaBase) {
+            html = html.replace(/(<img\b[^>]*?\bsrc=")(?!https?:|data:|blob:|\/)([^"]+)(")/gi, (_m, open: string, src: string, close: string) =>
+              `${open}${mediaBase}/${src.replace(/^\.?\//, "")}${close}`);
+          }
+          return injectCopyButtons(renderCallouts(DOMPurify.sanitize(html)));
+        }
       )
       .catch((error: unknown) => {
         markdownRendererPromise = null;
@@ -1438,6 +1464,21 @@ export default function App() {
     [historyFor, appendLog]
   );
 
+  const onMdPreviewClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const btn = (e.target as HTMLElement).closest(".md-copy");
+    if (!btn) return;
+    const pre = btn.closest("pre");
+    const code = pre?.querySelector("code")?.textContent ?? "";
+    void navigator.clipboard.writeText(code).then(() => {
+      btn.classList.add("copied");
+      btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+      window.setTimeout(() => {
+        btn.classList.remove("copied");
+        btn.innerHTML = COPY_ICON_SVG;
+      }, 1200);
+    });
+  }, []);
+
   const commitMdHtml = useMemo(() => {
     const body = commitDetail?.message.split("\n").slice(2).join("\n");
     if (!body || !markdownRenderer) return null;
@@ -1518,6 +1559,7 @@ export default function App() {
  
   const runActiveRef = useRef(() => {});
   const saveActiveRef = useRef(() => {});
+  const newFileRef = useRef((_dir?: string) => {});
   runActiveRef.current = runActive;
   saveActiveRef.current = () => {
     if (!active) return;
@@ -1541,6 +1583,7 @@ export default function App() {
     setRenaming({ kind: "file", id, isNew: true });
     setRenameText("");
   }, []);
+  newFileRef.current = newFile;
  
   const newFolder = useCallback(() => {
     untitledCount.current += 1;
@@ -1719,6 +1762,14 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         setSidebarOpen((o) => !o);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setPaletteOpen(true);
+        setQuery("");
+        setHlIndex(0);
+      } else if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        newFileRef.current();
       } else if (e.key === "Escape") {
         setPaletteOpen(false);
         setMenu(null);
@@ -2289,7 +2340,16 @@ export default function App() {
           {ghRestoring ? (
             <div className="loading-pane"><Loader size={22} /></div>
           ) : !active ? (
-            <div className="empty-pane" />
+            <div className="empty-pane">
+              <div className="empty-logo" style={{ "--icon": `url("${logoGlyph}")` } as React.CSSProperties} />
+              <div className="empty-corner">
+                <div className="empty-corner-title">LUMEN</div>
+                <div className="empty-corner-row"><span className="empty-key">Ctrl</span><span className="empty-plus">+</span><span className="empty-key">K</span><span className="empty-desc">命令面板</span></div>
+                <div className="empty-corner-row"><span className="empty-key">Ctrl</span><span className="empty-plus">+</span><span className="empty-key">P</span><span className="empty-desc">快速打开文件</span></div>
+                <div className="empty-corner-row"><span className="empty-key">Ctrl</span><span className="empty-plus">+</span><span className="empty-key">Alt</span><span className="empty-plus">+</span><span className="empty-key">N</span><span className="empty-desc">新建文件</span></div>
+                <div className="empty-corner-ver">v1.6.0</div>
+              </div>
+            </div>
           ) : ghMeta.current.has(active.id) && !ghMeta.current.get(active.id)!.loaded ? (
             <div className="loading-pane"><Loader size={22} /></div>
           ) : ghImages.has(active.id) ? (
@@ -2306,8 +2366,9 @@ export default function App() {
           ) : fileExt(active.name) === "md" && mdPreviewIds.has(active.id) && markdownRenderer ? (
             <div
               className="md-preview"
+              onClick={onMdPreviewClick}
               dangerouslySetInnerHTML={{
-                __html: markdownRenderer(getCachedDoc(active.id, active.content)),
+                __html: markdownRenderer(getCachedDoc(active.id, active.content), ghTree ? `https://raw.githubusercontent.com/${ghTree.ref.owner}/${ghTree.ref.repo}/${ghTree.ref.branch}/${(ghMeta.current.get(active.id)?.path ?? "").split("/").slice(0, -1).join("/")}`.replace(/\/$/, "") : undefined),
               }}
             />
           ) : active.hyper ? (
@@ -2424,7 +2485,12 @@ export default function App() {
                   </div>
                 </div>
                 {!sf ? (
-                  <div className="empty-pane" />
+                  <div className="empty-pane">
+                    <div className="empty-logo sm" style={{ "--icon": `url("${logoGlyph}")` } as React.CSSProperties} />
+                    <div className="empty-corner">
+                      <div className="empty-corner-row"><span className="empty-key">Ctrl</span><span className="empty-plus">+</span><span className="empty-key">\</span><span className="empty-desc">拆分编辑器</span></div>
+                    </div>
+                  </div>
                 ) : ghMeta.current.has(sf.id) && !ghMeta.current.get(sf.id)!.loaded ? (
                   <div className="loading-pane"><Loader size={22} /></div>
                 ) : ghImages.has(sf.id) ? (

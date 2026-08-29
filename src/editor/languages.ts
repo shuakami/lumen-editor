@@ -41,6 +41,11 @@ import pdfIcon from "material-icon-theme/icons/pdf.svg";
 import audioIcon from "material-icon-theme/icons/audio.svg";
 import videoIcon from "material-icon-theme/icons/video.svg";
 import docIcon from "../assets/file-text.svg";
+import gitIcon from "material-icon-theme/icons/git.svg";
+import editorconfigIcon from "material-icon-theme/icons/editorconfig.svg";
+import npmIcon from "material-icon-theme/icons/npm.svg";
+import eslintIcon from "material-icon-theme/icons/eslint.svg";
+import prettierIcon from "material-icon-theme/icons/prettier.svg";
  
 export interface LanguageDef {
   id: string;
@@ -104,7 +109,7 @@ const batch: StreamParser<unknown> = {
   },
 };
  
-const DEFS: Array<{ def: LanguageDef; exts: string[]; filenames?: string[] }> = [
+const DEFS: Array<{ def: LanguageDef; exts: string[]; filenames?: string[]; iconless?: boolean }> = [
   { def: { id: "csharp", label: "C#", icon: csharpIcon, extensions: deferred("csharp", async () => (await import("./csharp")).csharpExtensions()) }, exts: ["cs", "csx", "cake"] },
   { def: { id: "c", label: "C", icon: cIcon, extensions: deferred("c", async () => (await import("./csharp")).cExtensions()) }, exts: ["c", "i"] },
   { def: { id: "cpp", label: "C++", icon: cppIcon, extensions: deferred("cpp", async () => { const [lang, extra] = await Promise.all([import("@codemirror/lang-cpp"), import("./csharp")]); return [lang.cpp(), extra.cppHighlightExtras(), smoothCaret()]; }) }, exts: ["cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx", "inl", "ipp", "ixx", "cu", "cuh"] },
@@ -133,6 +138,13 @@ const DEFS: Array<{ def: LanguageDef; exts: string[]; filenames?: string[] }> = 
   { def: { id: "dockerfile", label: "Dockerfile", icon: dockerIcon, extensions: deferred("dockerfile", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/dockerfile")]); return [core.StreamLanguage.define(mode.dockerFile), smoothCaret()]; }) }, exts: ["dockerfile", "containerfile"], filenames: ["dockerfile", "containerfile"] },
   { def: { id: "diff", label: "Diff", icon: diffIcon, extensions: deferred("diff", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/diff")]); return [core.StreamLanguage.define(mode.diff), smoothCaret()]; }) }, exts: ["diff", "patch", "rej"] },
   { def: { id: "toml", label: "TOML", icon: tomlIcon, extensions: deferred("toml", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/toml")]); return [core.StreamLanguage.define(mode.toml), smoothCaret()]; }) }, exts: ["toml"] },
+  { def: { id: "properties", label: "Properties", icon: docIcon, extensions: deferred("properties", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/properties")]); return [core.StreamLanguage.define(mode.properties), smoothCaret()]; }) }, exts: ["properties", "ini", "cfg", "conf", "env"], filenames: [".env"] },
+  { def: { id: "gitignore", label: "Git Ignore", icon: gitIcon, extensions: deferred("gitignore", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/properties")]); return [core.StreamLanguage.define(mode.properties), smoothCaret()]; }) }, exts: [], filenames: [".gitignore", ".gitattributes"] },
+  { def: { id: "dockerignore", label: "Docker Ignore", icon: dockerIcon, extensions: deferred("dockerignore", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/properties")]); return [core.StreamLanguage.define(mode.properties), smoothCaret()]; }) }, exts: [], filenames: [".dockerignore"] },
+  { def: { id: "npmignore", label: "NPM Ignore", icon: npmIcon, extensions: deferred("npmignore", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/properties")]); return [core.StreamLanguage.define(mode.properties), smoothCaret()]; }) }, exts: [], filenames: [".npmignore"] },
+  { def: { id: "eslintignore", label: "ESLint Ignore", icon: eslintIcon, extensions: deferred("eslintignore", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/properties")]); return [core.StreamLanguage.define(mode.properties), smoothCaret()]; }) }, exts: [], filenames: [".eslintignore"] },
+  { def: { id: "prettierignore", label: "Prettier Ignore", icon: prettierIcon, extensions: deferred("prettierignore", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/properties")]); return [core.StreamLanguage.define(mode.properties), smoothCaret()]; }) }, exts: [], filenames: [".prettierignore"] },
+  { def: { id: "editorconfig", label: "Editor Config", icon: editorconfigIcon, extensions: deferred("editorconfig", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/properties")]); return [core.StreamLanguage.define(mode.properties), smoothCaret()]; }) }, exts: [], filenames: [".editorconfig"] },
   { def: { id: "perl", label: "Perl", icon: perlIcon, extensions: deferred("perl", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/perl")]); return [core.StreamLanguage.define(mode.perl), smoothCaret()]; }) }, exts: ["pl", "pm", "pod", "psgi"] },
   { def: { id: "r", label: "R", icon: rIcon, extensions: deferred("r", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/r")]); return [core.StreamLanguage.define(mode.r), smoothCaret()]; }) }, exts: ["r", "rhistory", "rprofile"] },
   { def: { id: "clojure", label: "Clojure", icon: clojureIcon, extensions: deferred("clojure", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/clojure")]); return [core.StreamLanguage.define(mode.clojure), smoothCaret()]; }) }, exts: ["clj", "cljc", "cljs", "edn"] },
