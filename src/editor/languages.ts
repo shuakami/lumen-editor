@@ -38,6 +38,8 @@ import imageIcon from "material-icon-theme/icons/image.svg";
 import fontIcon from "material-icon-theme/icons/font.svg";
 import zipIcon from "material-icon-theme/icons/zip.svg";
 import pdfIcon from "material-icon-theme/icons/pdf.svg";
+import tableIcon from "material-icon-theme/icons/table.svg";
+import wordIcon from "material-icon-theme/icons/word.svg";
 import audioIcon from "material-icon-theme/icons/audio.svg";
 import videoIcon from "material-icon-theme/icons/video.svg";
 import docIcon from "../assets/file-text.svg";
@@ -129,13 +131,13 @@ const DEFS: Array<{ def: LanguageDef; exts: string[]; filenames?: string[]; icon
   { def: { id: "xml", label: "XML", icon: xmlIcon, extensions: deferred("xml", async () => { const lang = await import("@codemirror/lang-xml"); return [lang.xml(), ...scopedLanguageHighlight("xml", lang.xmlLanguage), smoothCaret()]; }) }, exts: ["xml", "xsd", "xsl", "svg", "csproj", "props", "targets"] },
   { def: { id: "yaml", label: "YAML", icon: yamlIcon, extensions: deferred("yaml", async () => { const lang = await import("@codemirror/lang-yaml"); return [lang.yaml(), ...scopedLanguageHighlight("yaml", lang.yamlLanguage), smoothCaret()]; }) }, exts: ["yaml", "yml"] },
   { def: { id: "php", label: "PHP", icon: phpIcon, extensions: deferred("php", async () => [(await import("@codemirror/lang-php")).php(), smoothCaret()]) }, exts: ["php", "php4", "php5", "phtml"] },
-  { def: { id: "shellscript", label: "Shell Script", icon: shellIcon, extensions: deferred("shellscript", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/shell")]); return [core.StreamLanguage.define(mode.shell), smoothCaret()]; }) }, exts: ["sh", "bash", "zsh", "ksh", "fish", "bashrc", "zshrc"] },
+  { def: { id: "shellscript", label: "Shell Script", icon: shellIcon, extensions: deferred("shellscript", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/shell")]); const lang = core.StreamLanguage.define(mode.shell); return [lang, ...scopedLanguageHighlight("shellscript", lang), smoothCaret()]; }) }, exts: ["sh", "bash", "zsh", "ksh", "fish", "bashrc", "zshrc"] },
   { def: { id: "bat", label: "Batch", icon: shellIcon, extensions: deferred("bat", async () => [(await import("@codemirror/language")).StreamLanguage.define(batch), smoothCaret()]) }, exts: ["bat", "cmd"] },
   { def: { id: "powershell", label: "PowerShell", icon: powershellIcon, extensions: deferred("powershell", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/powershell")]); return [core.StreamLanguage.define(mode.powerShell), smoothCaret()]; }) }, exts: ["ps1", "psm1", "psd1"] },
   { def: { id: "ruby", label: "Ruby", icon: rubyIcon, extensions: deferred("ruby", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/ruby")]); return [core.StreamLanguage.define(mode.ruby), smoothCaret()]; }) }, exts: ["rb", "rake", "gemspec", "ru"], filenames: ["gemfile", "rakefile"] },
   { def: { id: "lua", label: "Lua", icon: luaIcon, extensions: deferred("lua", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/lua")]); return [core.StreamLanguage.define(mode.lua), smoothCaret()]; }) }, exts: ["lua"] },
   { def: { id: "swift", label: "Swift", icon: swiftIcon, extensions: deferred("swift", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/swift")]); return [core.StreamLanguage.define(mode.swift), smoothCaret()]; }) }, exts: ["swift"] },
-  { def: { id: "dockerfile", label: "Dockerfile", icon: dockerIcon, extensions: deferred("dockerfile", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/dockerfile")]); return [core.StreamLanguage.define(mode.dockerFile), smoothCaret()]; }) }, exts: ["dockerfile", "containerfile"], filenames: ["dockerfile", "containerfile"] },
+  { def: { id: "dockerfile", label: "Dockerfile", icon: dockerIcon, extensions: deferred("dockerfile", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/dockerfile")]); const lang = core.StreamLanguage.define(mode.dockerFile); return [lang, ...scopedLanguageHighlight("dockerfile", lang), smoothCaret()]; }) }, exts: ["dockerfile", "containerfile"], filenames: ["dockerfile", "containerfile"] },
   { def: { id: "diff", label: "Diff", icon: diffIcon, extensions: deferred("diff", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/diff")]); return [core.StreamLanguage.define(mode.diff), smoothCaret()]; }) }, exts: ["diff", "patch", "rej"] },
   { def: { id: "toml", label: "TOML", icon: tomlIcon, extensions: deferred("toml", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/toml")]); return [core.StreamLanguage.define(mode.toml), smoothCaret()]; }) }, exts: ["toml"] },
   { def: { id: "properties", label: "Properties", icon: docIcon, extensions: deferred("properties", async () => { const [core, mode] = await Promise.all([import("@codemirror/language"), import("@codemirror/legacy-modes/mode/properties")]); return [core.StreamLanguage.define(mode.properties), smoothCaret()]; }) }, exts: ["properties", "ini", "cfg", "conf", "env"], filenames: [".env"] },
@@ -152,6 +154,8 @@ const DEFS: Array<{ def: LanguageDef; exts: string[]; filenames?: string[]; icon
   { def: { id: "font", label: "字体", icon: fontIcon, extensions: () => [smoothCaret()] }, exts: ["ttf", "otf", "woff", "woff2", "eot"] },
   { def: { id: "archive", label: "压缩包", icon: zipIcon, extensions: () => [smoothCaret()] }, exts: ["zip", "gz", "tar", "tgz", "rar", "7z", "jar"] },
   { def: { id: "pdf", label: "PDF", icon: pdfIcon, extensions: () => [smoothCaret()] }, exts: ["pdf"] },
+  { def: { id: "csv", label: "CSV 表格", icon: tableIcon, extensions: () => [smoothCaret()] }, exts: ["csv", "tsv"] },
+  { def: { id: "docx", label: "Word 文档", icon: wordIcon, extensions: () => [smoothCaret()] }, exts: ["docx"] },
   { def: { id: "audio", label: "音频", icon: audioIcon, extensions: () => [smoothCaret()] }, exts: ["mp3", "wav", "ogg", "flac", "m4a"] },
   { def: { id: "video", label: "视频", icon: videoIcon, extensions: () => [smoothCaret()] }, exts: ["mp4", "webm", "mov", "avi", "mkv"] },
 ];

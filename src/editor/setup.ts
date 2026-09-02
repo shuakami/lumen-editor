@@ -79,7 +79,6 @@ function buildSetup(completions: boolean): Extension[] {
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
     indentOnInput(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     bracketMatching(),
     closeBrackets(),
     ...(completions ? [autocompletion()] : []),

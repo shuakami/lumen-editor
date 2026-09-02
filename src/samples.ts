@@ -5,6 +5,8 @@ export interface SampleFile {
   hyper?: boolean;
   badge?: string;
   content: string;
+  /** 二进制样例（PDF/Word）：启动时从 public/demo/ 拉取 */
+  demoUrl?: string;
 }
  
 const programCs = `using System;
@@ -495,6 +497,24 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 `;
  
+const salesCsv = `月份,地区,产品,数量,单价,营收
+2026-01,华东,Aurora 笔记本,420,7999.00,3359580.00
+2026-01,华东,Comet 键盘,1830,499.00,911670.00
+2026-01,华北,Aurora 笔记本,365,7999.00,2919635.00
+2026-01,华北,"Nova 显示器, 27\"\" 4K",880,3299.00,2903120.00
+2026-01,华南,Comet 键盘,2210,499.00,1102790.00
+2026-02,华东,Aurora 笔记本,502,7999.00,4015498.00
+2026-02,华东,"Nova 显示器, 27\"\" 4K",640,3299.00,2111360.00
+2026-02,华北,Comet 键盘,1975,499.00,985525.00
+2026-02,华南,Aurora 笔记本,298,7999.00,2383702.00
+2026-02,西部,"Nova 显示器, 27\"\" 4K",210,3299.00,692790.00
+2026-03,华东,Orbit 鼠标,5300,299.00,1584700.00
+2026-03,华北,"Nova 显示器, 27\"\" 4K",705,3299.00,2325795.00
+2026-03,华南,Comet 键盘,2640,499.00,1317360.00
+2026-03,西部,Aurora 笔记本,187,7999.00,1495813.00
+2026-03,西部,Orbit 鼠标,3120,299.00,932880.00
+`;
+
 export const SAMPLE_FILES: SampleFile[] = [
   { id: "program", name: "Program.cs", dir: "src", content: programCs },
   { id: "pipeline", name: "OrderPipeline.cs", dir: "src", content: pipelineCs },
@@ -505,6 +525,9 @@ export const SAMPLE_FILES: SampleFile[] = [
   { id: "signal", name: "signal.ts", dir: "web", content: signalTs },
   { id: "tokenizer", name: "tokenizer.py", dir: "scripts", content: tokenizerPy },
   { id: "ci", name: "ci.yaml", dir: ".github", content: ciYaml },
+  { id: "sales", name: "sales.csv", dir: "data", content: salesCsv },
+  { id: "pdfdemo", name: "lumen.pdf", dir: "data", demoUrl: "demo/lumen.pdf", content: "" },
+  { id: "docxdemo", name: "lumen.docx", dir: "data", demoUrl: "demo/lumen.docx", content: "" },
   { id: "readme", name: "README.md", content: readmeMd },
   { id: "dockerfile", name: "Dockerfile", content: dockerfileTxt },
 ];

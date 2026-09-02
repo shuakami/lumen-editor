@@ -166,7 +166,7 @@ const lightChrome = chrome({
 const darkHighlight: Extension[] = [
   syntaxHighlighting(
   HighlightStyle.define([
-    { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.modifier, t.definitionKeyword, t.operatorKeyword], color: "#82d2ce" },
+    { tag: [t.controlKeyword, t.moduleKeyword, t.modifier, t.definitionKeyword, t.operatorKeyword], color: "#82d2ce" },
     { tag: [t.self], color: "#cc7c8a" },
     { tag: [t.compareOperator, t.logicOperator], color: "#82d2ce" },
     { tag: [t.typeName, t.standard(t.typeName)], color: "#82d2ce" },
@@ -204,7 +204,7 @@ const darkHighlight: Extension[] = [
 const lightHighlight: Extension[] = [
   syntaxHighlighting(
   HighlightStyle.define([
-    { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.modifier, t.definitionKeyword, t.operatorKeyword], color: "#b3003f" },
+    { tag: [t.controlKeyword, t.moduleKeyword, t.modifier, t.definitionKeyword, t.operatorKeyword], color: "#b3003f" },
     { tag: [t.self], color: "#b8448b" },
     { tag: [t.compareOperator, t.logicOperator, t.bitwiseOperator], color: "#b3003f" },
     { tag: [t.typeName, t.standard(t.typeName)], color: "#b3003f" },
@@ -240,7 +240,7 @@ const lightHighlight: Extension[] = [
   ])),
 ];
 
-export type ScopedLanguageId = "json" | "yaml" | "css" | "html" | "xml" | "markdown";
+export type ScopedLanguageId = "json" | "yaml" | "css" | "html" | "xml" | "markdown" | "dockerfile" | "shellscript" | "bat" | "powershell" | "ruby" | "rust" | "ini";
 
 const scopedHighlights: Record<ScopedLanguageId, { dark: readonly TagStyle[]; light: readonly TagStyle[] }> = {
   json: {
@@ -317,6 +317,118 @@ const scopedHighlights: Record<ScopedLanguageId, { dark: readonly TagStyle[]; li
     light: [
       { tag: [t.processingInstruction, t.punctuation], color: "#14141499" },
       { tag: [t.list], color: "#141414" },
+    ],
+  },
+  dockerfile: {
+    dark: [
+      { tag: [t.keyword], color: "#82d2ce", fontWeight: "600" },
+      { tag: [t.atom], color: "#87c3ff" },
+      { tag: [t.attributeName], color: "#aaa0fa" },
+      { tag: [t.string], color: "#e394dc" },
+      { tag: [t.number], color: "#e5b07d" },
+      { tag: [t.comment], color: "#888", fontStyle: "italic" },
+    ],
+    light: [
+      { tag: [t.keyword], color: "#3574f0", fontWeight: "600" },
+      { tag: [t.atom], color: "#3b6db5" },
+      { tag: [t.attributeName], color: "#6049b3" },
+      { tag: [t.string], color: "#9e94d5" },
+      { tag: [t.number], color: "#c7634a" },
+      { tag: [t.comment], color: "#999", fontStyle: "italic" },
+    ],
+  },
+  shellscript: {
+    dark: [
+      { tag: [t.keyword], color: "#82d2ce" },
+      { tag: [t.atom], color: "#87c3ff" },
+      { tag: [t.attributeName], color: "#aaa0fa" },
+      { tag: [t.string], color: "#e394dc" },
+      { tag: [t.number], color: "#e5b07d" },
+      { tag: [t.comment], color: "#888", fontStyle: "italic" },
+      { tag: [t.variableName], color: "#ebc88d" },
+    ],
+    light: [
+      { tag: [t.keyword], color: "#3574f0" },
+      { tag: [t.atom], color: "#3b6db5" },
+      { tag: [t.attributeName], color: "#6049b3" },
+      { tag: [t.string], color: "#9e94d5" },
+      { tag: [t.number], color: "#c7634a" },
+      { tag: [t.comment], color: "#999", fontStyle: "italic" },
+      { tag: [t.variableName], color: "#a86b1d" },
+    ],
+  },
+  bat: {
+    dark: [
+      { tag: [t.keyword], color: "#82d2ce" },
+      { tag: [t.string], color: "#e394dc" },
+      { tag: [t.comment], color: "#888", fontStyle: "italic" },
+    ],
+    light: [
+      { tag: [t.keyword], color: "#3574f0" },
+      { tag: [t.string], color: "#9e94d5" },
+      { tag: [t.comment], color: "#999", fontStyle: "italic" },
+    ],
+  },
+  powershell: {
+    dark: [
+      { tag: [t.keyword], color: "#82d2ce" },
+      { tag: [t.atom], color: "#87c3ff" },
+      { tag: [t.string], color: "#e394dc" },
+      { tag: [t.comment], color: "#888", fontStyle: "italic" },
+    ],
+    light: [
+      { tag: [t.keyword], color: "#3574f0" },
+      { tag: [t.atom], color: "#3b6db5" },
+      { tag: [t.string], color: "#9e94d5" },
+      { tag: [t.comment], color: "#999", fontStyle: "italic" },
+    ],
+  },
+  ruby: {
+    dark: [
+      { tag: [t.keyword], color: "#82d2ce" },
+      { tag: [t.atom], color: "#87c3ff" },
+      { tag: [t.string], color: "#e394dc" },
+      { tag: [t.number], color: "#e5b07d" },
+      { tag: [t.comment], color: "#888", fontStyle: "italic" },
+    ],
+    light: [
+      { tag: [t.keyword], color: "#3574f0" },
+      { tag: [t.atom], color: "#3b6db5" },
+      { tag: [t.string], color: "#9e94d5" },
+      { tag: [t.number], color: "#c7634a" },
+      { tag: [t.comment], color: "#999", fontStyle: "italic" },
+    ],
+  },
+  rust: {
+    dark: [
+      { tag: [t.keyword], color: "#82d2ce" },
+      { tag: [t.atom], color: "#87c3ff" },
+      { tag: [t.typeName], color: "#aaa0fa" },
+      { tag: [t.string], color: "#e394dc" },
+      { tag: [t.number], color: "#e5b07d" },
+      { tag: [t.comment], color: "#888", fontStyle: "italic" },
+    ],
+    light: [
+      { tag: [t.keyword], color: "#3574f0" },
+      { tag: [t.atom], color: "#3b6db5" },
+      { tag: [t.typeName], color: "#6049b3" },
+      { tag: [t.string], color: "#9e94d5" },
+      { tag: [t.number], color: "#c7634a" },
+      { tag: [t.comment], color: "#999", fontStyle: "italic" },
+    ],
+  },
+  ini: {
+    dark: [
+      { tag: [t.atom], color: "#82d2ce", fontWeight: "600" },
+      { tag: [t.attributeName], color: "#aaa0fa" },
+      { tag: [t.string], color: "#e394dc" },
+      { tag: [t.comment], color: "#888", fontStyle: "italic" },
+    ],
+    light: [
+      { tag: [t.atom], color: "#3574f0", fontWeight: "600" },
+      { tag: [t.attributeName], color: "#6049b3" },
+      { tag: [t.string], color: "#9e94d5" },
+      { tag: [t.comment], color: "#999", fontStyle: "italic" },
     ],
   },
 };

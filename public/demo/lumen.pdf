@@ -1,0 +1,92 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [6 0 R 8 0 R 10 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+5 0 obj
+<< /Length 1059 >>
+stream
+BT /F2 22 Tf 72 708 Td (Lumen Editor - Product Overview) Tj ET
+BT /F1 12 Tf 72 678 Td (A browser-based editor for code and documents, built with React, Vite and CodeMirror 6.) Tj ET
+BT /F1 12 Tf 72 656 Td (This demo document exercises the built-in PDF viewer: text extraction, page) Tj ET
+BT /F1 12 Tf 72 642 Td (navigation and full-text search are all supported.) Tj ET
+BT /F2 14 Tf 72 610 Td (Highlights) Tj ET
+BT /F1 11.5 Tf 72 590 Td (- Multi-tab editing with split views and per-file sessions) Tj ET
+BT /F1 11.5 Tf 72 574 Td (- GitHub repositories opened directly from the address bar or the picker) Tj ET
+BT /F1 11.5 Tf 72 558 Td (- Syntax highlighting for 60+ languages, including Dockerfile and shell) Tj ET
+BT /F1 11.5 Tf 72 542 Td (- Markdown preview, CSV tables, Word documents and PDF files) Tj ET
+BT /F2 14 Tf 72 506 Td (Try it) Tj ET
+BT /F1 11.5 Tf 72 488 Td (Use the toolbar search box and type 'phoenix' - the page counter will report) Tj ET
+BT /F1 11.5 Tf 72 474 Td (matches found on the current page. Switch pages with the page menu.) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 5 0 R >>
+endobj
+7 0 obj
+<< /Length 1218 >>
+stream
+BT /F2 20 Tf 72 708 Td (Monthly Revenue \(sample data\)) Tj ET
+BT /F2 12 Tf 72 676 Td (Month      Region      Product            Units      Revenue) Tj ET
+BT /F1 11.5 Tf 72 656 Td (2026-01    East        Aurora Laptop      420        3,359,580) Tj ET
+BT /F1 11.5 Tf 72 639 Td (2026-01    North       Comet Keyboard     1830       911,670) Tj ET
+BT /F1 11.5 Tf 72 622 Td (2026-01    South       Nova Monitor 4K    880        2,903,120) Tj ET
+BT /F1 11.5 Tf 72 605 Td (2026-02    East        Aurora Laptop      502        4,015,498) Tj ET
+BT /F1 11.5 Tf 72 588 Td (2026-02    East        Nova Monitor 4K    640        2,111,360) Tj ET
+BT /F1 11.5 Tf 72 571 Td (2026-02    South       Aurora Laptop      298        2,383,702) Tj ET
+BT /F1 11.5 Tf 72 554 Td (2026-03    East        Orbit Mouse        5300       1,584,700) Tj ET
+BT /F1 11.5 Tf 72 537 Td (2026-03    North       Comet Keyboard     1975       985,525) Tj ET
+BT /F1 11.5 Tf 72 520 Td (2026-03    West        Nova Monitor 4K    705        2,325,795) Tj ET
+BT /F1 11.5 Tf 72 503 Td (2026-03    West        Orbit Mouse        3120       932,880) Tj ET
+BT /F1 12 Tf 72 456 Td (The phoenix keyword appears here so search has something to find on page two.) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 7 0 R >>
+endobj
+9 0 obj
+<< /Length 902 >>
+stream
+BT /F2 20 Tf 72 708 Td (Release Notes) Tj ET
+BT /F1 11.5 Tf 72 678 Td (1.6.0  Added CSV table view, Word and PDF rendering with search.) Tj ET
+BT /F1 11.5 Tf 72 662 Td (1.5.2  Fixed Dockerfile keyword color in dark theme; session restore keeps) Tj ET
+BT /F1 11.5 Tf 72 648 Td (       collapsed folders.) Tj ET
+BT /F1 11.5 Tf 72 630 Td (1.5.0  GitHub repository picker: recents, my repositories, quick search.) Tj ET
+BT /F1 11.5 Tf 72 614 Td (1.4.0  Split editor with drag-and-drop tabs, VS Code style empty state.) Tj ET
+BT /F2 14 Tf 72 590 Td (Keyboard Shortcuts) Tj ET
+BT /F1 11.5 Tf 72 570 Td (Ctrl+P        Command palette) Tj ET
+BT /F1 11.5 Tf 72 554 Td (Ctrl+Alt+N    New file) Tj ET
+BT /F1 11.5 Tf 72 538 Td (Ctrl+B        Toggle sidebar) Tj ET
+BT /F1 11.5 Tf 72 522 Td (Ctrl+S        Commit and push) Tj ET
+BT /F1 11.5 Tf 72 490 Td (Generated for the Lumen editor showcase. End of demo.) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 9 0 R >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000128 00000 n 
+0000000198 00000 n 
+0000000273 00000 n 
+0000001383 00000 n 
+0000001519 00000 n 
+0000002788 00000 n 
+0000002924 00000 n 
+0000003876 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R >>
+startxref
+4013
+%%EOF

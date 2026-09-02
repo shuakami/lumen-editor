@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Editor, getCachedDoc, setCachedDoc, revealLine, openFindPanel, openGotoLine, type CursorInfo } from "./Editor";
 import { setWorkspaceFiles } from "./editor/imports";
 import { HyperEditor, HYPER_COUNT } from "./HyperEditor";
@@ -15,6 +15,10 @@ import { Loader } from "./Loader";
 import colorModeIcon from "./assets/codicons/color-mode.svg";
 import searchIcon from "./assets/codicons/search.svg";
 import arrowRightIcon from "./assets/codicons/arrow-right.svg";
+import chevronRightIcon from "./assets/codicons/chevron-right.svg";
+const CsvTable = lazy(() => import("./docview").then((m) => ({ default: m.CsvTable })));
+const DocxView = lazy(() => import("./docview").then((m) => ({ default: m.DocxView })));
+const PdfView = lazy(() => import("./docview").then((m) => ({ default: m.PdfView })));
 import newFileIcon from "./assets/codicons/new-file.svg";
 import newFolderIcon from "./assets/codicons/new-folder.svg";
 import refreshIcon from "./assets/codicons/refresh.svg";
@@ -118,6 +122,8 @@ interface CtxItem {
   sep?: boolean;
   checked?: boolean;
   run?: () => void;
+  submenu?: CtxItem[];
+  avatar?: string;
 }
  
 interface ConsoleLine {
@@ -187,6 +193,7 @@ function cancelTrailing(tasks: Map<string, TrailingTask>): void {
 }
 
 /** 无法作为文本编辑的二进制文件：编辑器区显示占位 + 下载按钮 */
+const DOC_EXTS = new Set(["pdf", "docx"]);
 const BINARY_EXTS = new Set([
   "exe", "dll", "so", "dylib", "bin", "o", "a", "lib", "obj", "class", "wasm", "pdb",
   "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "apk", "ipa", "deb", "rpm", "dmg", "iso", "msi",
@@ -228,6 +235,27 @@ interface RecentRepo {
   at: number;
 }
 const RECENTS_KEY = "lumen.recent.repos";
+const GH_USER_KEY = "lumen.gh.user";
+const GH_TOKEN_PRESENT_KEY = "lumen.gh.token_present"; // 仅标记，不存值，避免误读
+let ghUserCache: { login: string; avatar: string } | null = null;
+
+async function getCurrentGhUser(token: string): Promise<{ login: string; avatar: string }> {
+  if (ghUserCache && ghUserCache.login) return ghUserCache;
+  if (!token) return { login: "", avatar: "" };
+  try {
+    const u = await fetch("https://api.github.com/user", { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } });
+    if (!u.ok) return { login: "", avatar: "" };
+    const j = await u.json();
+    const login = typeof j?.login === "string" ? j.login : "";
+    const avatar = typeof j?.avatar_url === "string" ? j.avatar_url : "";
+    if (login) {
+      ghUserCache = { login, avatar };
+      localStorage.setItem(GH_USER_KEY, login);
+      if (avatar) localStorage.setItem("lumen.gh.avatar", avatar);
+    }
+    return { login, avatar };
+  } catch { return { login: "", avatar: "" }; }
+}
 function loadRecents(): RecentRepo[] {
   try {
     const list = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]") as RecentRepo[];
@@ -239,9 +267,14 @@ function loadRecents(): RecentRepo[] {
 function pushRecent(repo: string, branch: string): RecentRepo[] {
   const list = loadRecents().filter((r) => !(r.repo === repo && r.branch === branch));
   list.unshift({ repo, branch, at: Date.now() });
-  const out = list.slice(0, 8);
+  const out = list.slice(0, 12);
   localStorage.setItem(RECENTS_KEY, JSON.stringify(out));
   return out;
+}
+function removeRecent(repo: string, branch: string): void {
+  const list = loadRecents().filter((r) => !(r.repo === repo && r.branch === branch));
+  localStorage.setItem(RECENTS_KEY, JSON.stringify(list));
+  window.dispatchEvent(new CustomEvent("lumen:recents"));
 }
 
 interface DiffRow {
@@ -399,6 +432,8 @@ export default function App() {
   const dragTabId = useRef<string | null>(null);
   const [dropZone, setDropZone] = useState<null | "main-right" | "main-full" | "split-full">(null);
   const [openMenubar, setOpenMenubar] = useState<string | null>(null);
+  const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+  const [recentSubmenu, setRecentSubmenu] = useState<{ owner: string; repos: string[]; items: CtxItem[] } | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [aboutClosing, setAboutClosing] = useState(false);
   const closeAbout = useCallback(() => {
@@ -422,6 +457,20 @@ export default function App() {
   const [ghLoadedTick, setGhLoadedTick] = useState(0);
   const [commitError, setCommitError] = useState("");
   const [mdPreviewIds, setMdPreviewIds] = useState<Set<string>>(new Set());
+  const [gridPreviewIds, setGridPreviewIds] = useState<Set<string>>(new Set());
+  const [docBytes, setDocBytes] = useState<Map<string, ArrayBuffer>>(new Map());
+  const demoFetched = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    // 二进制样例按需加载：仅在对应标签页被打开时才 fetch
+    const f = files.find((x) => x.id === activeId);
+    const url = f ? (f as SampleFile).demoUrl : undefined;
+    if (!f || !url || docBytes.has(f.id) || demoFetched.current.has(url)) return;
+    demoFetched.current.add(url);
+    void fetch(url)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
+      .then((buf) => setDocBytes((m) => new Map(m).set(f.id, buf)))
+      .catch((e: unknown) => console.error("Failed to load demo", url, e));
+  }, [activeId, files, docBytes]);
   const [markdownRenderer, setMarkdownRenderer] = useState<MarkdownRenderer | null>(null);
   const preloader = useRef<Preloader | null>(null);
   const [ghImages, setGhImages] = useState<Map<string, string>>(new Map());
@@ -435,6 +484,14 @@ export default function App() {
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branchBusy, setBranchBusy] = useState(false);
   const [recents, setRecents] = useState<RecentRepo[]>(loadRecents);
+  const [ghUser, setGhUser] = useState<string>(() => localStorage.getItem(GH_USER_KEY) ?? "");
+  const [ghAvatar, setGhAvatar] = useState<string>(() => localStorage.getItem("lumen.gh.avatar") ?? "");
+  useEffect(() => { setGhAvatar(localStorage.getItem("lumen.gh.avatar") ?? ""); }, [ghOpen]);
+  const [userRepos, setUserRepos] = useState<{ full_name: string; default_branch: string; private: boolean }[]>([]);
+  const [collapsedOwners, setCollapsedOwners] = useState<Set<string>>(new Set());
+  const userReposPage = useRef(1);
+  const [reposLimit, setReposLimit] = useState(3);
+  const [reposLoading, setReposLoading] = useState(false);
   // 提交历史（path 为空 = 分支提交树；有 path = 单文件修改历史）
   const [historyFor, setHistoryFor] = useState<null | { path?: string }>(null);
   const [historyList, setHistoryList] = useState<GhCommit[] | null>(null);
@@ -556,6 +613,16 @@ export default function App() {
             const bytes = b64ToBytes(b64);
             const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: IMAGE_MIME[ext] }));
             setGhImages((m) => new Map(m).set(id, url));
+            meta.loaded = true;
+            setGhLoadedTick((n) => n + 1);
+          } else if (DOC_EXTS.has(ext)) {
+            let b64 = await cacheGet(meta.sha);
+            if (b64 === null) {
+              b64 = await fetchBlobB64(tree.ref, meta.sha);
+              cachePut(meta.sha, b64);
+            }
+            const bytes = b64ToBytes(b64);
+            setDocBytes((m) => new Map(m).set(id, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer));
             meta.loaded = true;
             setGhLoadedTick((n) => n + 1);
           } else if (BINARY_EXTS.has(ext)) {
@@ -978,6 +1045,7 @@ export default function App() {
       let openRestored: string[] = [];
       let activeRestored = "";
       let splitRestored: string | null = null;
+      let collapsedRestored: Set<string> | null = null;
       try {
         const raw = localStorage.getItem(`lumen.session.${repo}`);
         if (raw) {
@@ -985,6 +1053,7 @@ export default function App() {
             open?: string[];
             active?: string;
             split?: string | null;
+            collapsed?: string[];
             cursors?: Record<string, { line: number; col: number }>;
             consoleOpen?: boolean;
             consoleHeight?: number;
@@ -995,6 +1064,7 @@ export default function App() {
           openRestored = (s.open ?? []).filter((x) => idSet.has(x));
           activeRestored = s.active && idSet.has(s.active) ? s.active : openRestored[0] ?? "";
           splitRestored = s.split && idSet.has(s.split) ? s.split : null;
+          if (Array.isArray(s.collapsed)) collapsedRestored = new Set(s.collapsed.filter((x) => typeof x === "string"));
           if (s.cursors) cursorMap.current = new Map(Object.entries(s.cursors));
           if (typeof s.consoleHeight === "number") setConsoleHeight(Math.min(Math.max(s.consoleHeight, 120), Math.max(120, window.innerHeight - 160)));
           if (typeof s.consoleOpen === "boolean") setConsoleOpen(s.consoleOpen);
@@ -1034,7 +1104,9 @@ export default function App() {
         for (const b of m.values()) URL.revokeObjectURL(b.url);
         return new Map();
       });
-      setCollapsed(new Set(fs.flatMap((f) => (f.dir ? ancestorDirs(f.dir) : []))));
+      // 树展开状态：优先恢复上次会话；目录可能已被删除，需过滤掉失效项
+      const validDirs = new Set(fs.flatMap((f) => (f.dir ? ancestorDirs(f.dir) : [])));
+      setCollapsed(collapsedRestored ? new Set([...collapsedRestored].filter((d) => validDirs.has(d))) : new Set(validDirs));
       setGhOpen(false);
       appendLog([{ kind: "info", text: `GitHub：已打开 ${tree.ref.owner}/${tree.ref.repo}@${tree.ref.branch}（${fs.length} 个文件）` }]);
       setRecents(pushRecent(`${tree.ref.owner}/${tree.ref.repo}`, tree.ref.branch));
@@ -1102,8 +1174,11 @@ export default function App() {
       const tree = await openRepo(parsed.owner, parsed.repo, token, branchInput);
       if (token) localStorage.setItem("lumen.gh.token", token);
       else localStorage.removeItem("lumen.gh.token");
+      localStorage.setItem(GH_TOKEN_PRESENT_KEY, token ? "1" : "");
       localStorage.setItem("lumen.gh.repo", `${parsed.owner}/${parsed.repo}`);
       localStorage.setItem("lumen.gh.branch", tree.ref.branch);
+      ghUserCache = null; // invalidate so user-specific listings refresh next open
+      void getCurrentGhUser(token ?? "");
       await applyTree(tree);
       return true;
     } catch (e) {
@@ -1128,6 +1203,7 @@ export default function App() {
       open: openIds,
       active: activeId,
       split: splitId,
+      collapsed: Array.from(collapsed),
       cursors: Object.fromEntries(cursorMap.current),
       consoleOpen,
       consoleHeight,
@@ -1135,7 +1211,7 @@ export default function App() {
       consoleScroll: Object.fromEntries(consoleScrollPos.current),
       sidebarScroll: sidebarScrollRef.current,
     }),
-    [openIds, activeId, splitId, consoleOpen, consoleHeight, consoleTab]
+    [openIds, activeId, splitId, collapsed, consoleOpen, consoleHeight, consoleTab]
   );
   const buildSessionRef = useRef(buildSession);
   buildSessionRef.current = buildSession;
@@ -1741,6 +1817,42 @@ export default function App() {
   }, [commands, query, searchCommands]);
  
   useEffect(() => setHlIndex(0), [query, paletteOpen]);
+
+  // When the GitHub open dialog opens and we have a token, fetch the current user
+  // and their repos so the picker can offer "我的仓库" / one-click open.
+  useEffect(() => {
+    if (!ghOpen) return;
+    const token = localStorage.getItem("lumen.gh.token") ?? "";
+    if (!token) { setGhUser(""); setUserRepos([]); return; }
+    let cancelled = false;
+    void (async () => {
+      const user = await getCurrentGhUser(token);
+      if (cancelled) return;
+      setGhUser(user.login);
+      setGhAvatar(user.avatar);
+      if (!user.login) { setUserRepos([]); return; }
+      try {
+        const r = await fetch("https://api.github.com/user/repos?per_page=30&sort=updated&affiliation=owner,collaborator&page=1", {
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
+        });
+        if (!r.ok) return;
+        const arr = await r.json();
+        if (cancelled) return;
+        userReposPage.current = 1;
+        setReposLimit(3);
+        setUserRepos(Array.isArray(arr) ? arr.map((x: { full_name: string; default_branch: string; private: boolean }) => ({
+          full_name: x.full_name, default_branch: x.default_branch, private: !!x.private,
+        })) : []);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [ghOpen, ghUser]);
+
+  useEffect(() => {
+    const refresh = () => setRecents(loadRecents());
+    window.addEventListener("lumen:recents", refresh);
+    return () => window.removeEventListener("lumen:recents", refresh);
+  }, []);
  
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1841,14 +1953,14 @@ export default function App() {
         { label: "全部保存", run: () => saveFile() },
         { sep: true },
         { label: "打开 GitHub 仓库…", run: () => { setGhError(""); setGhStep(0); setGhOpen(true); } },
-        ...recents.slice(0, 5).map((r) => ({
-          label: `最近：${r.repo}@${r.branch}`,
-          run: () => {
-            setGhRepoInput(r.repo);
-            setGhBranchInput(r.branch);
-            void openGithubRepo(r.repo, localStorage.getItem("lumen.gh.token") ?? "", r.branch);
-          },
-        })),
+        ...(recents.length > 0 ? [{
+          label: "最近打开",
+          submenu: recents.map((r) => ({
+            label: `${r.repo}`,
+            avatar: ghAvatar || undefined,
+            run: () => { setGhRepoInput(r.repo); setGhBranchInput(r.branch); void openGithubRepo(r.repo, localStorage.getItem("lumen.gh.token") ?? "", r.branch); },
+          })),
+        }] : []),
         ...(ghTree ? [{ label: `关闭仓库 ${ghTree.ref.owner}/${ghTree.ref.repo}`, run: closeGithub }] : []),
         { sep: true },
         { label: "自动保存", checked: autoSave, run: () => setAutoSave((v) => { if (!v) setDirty(new Set()); return !v; }) },
@@ -1999,26 +2111,65 @@ export default function App() {
                 {m.name}
               </button>
               {openMenubar === m.name && (
-                <div className="ctx-menu menubar-menu">
+                <div
+                  className="ctx-menu menubar-menu"
+                  onMouseLeave={() => setOpenSubmenu(null)}
+                >
                   {m.items.map((item, i) =>
                     item.sep ? (
                       <div key={`sep-${i}`} className="ctx-sep" />
                     ) : (
                       <button
                         key={item.label}
-                        className={`ctx-item${item.danger ? " danger" : ""}`}
+                        className={`ctx-item${item.danger ? " danger" : ""}${openSubmenu === item.label ? " open" : ""}`}
                         onClick={() => {
+                          if (item.submenu) return;
                           setOpenMenubar(null);
+                          setOpenSubmenu(null);
                           item.run?.();
                         }}
+                        onMouseEnter={() => setOpenSubmenu(item.submenu ? item.label ?? null : null)}
                       >
                         <span className="ctx-check">
-                        {item.checked && (
-                          <span className="cicon" style={{ "--icon": `url("${checkIcon}")` } as React.CSSProperties} />
-                        )}
-                      </span>
-                        {item.label}
+                          {item.avatar ? (
+                            <img className="ctx-avatar" src={item.avatar} alt="" />
+                          ) : item.checked ? (
+                            <span className="cicon" style={{ "--icon": `url("${checkIcon}")` } as React.CSSProperties} />
+                          ) : null}
+                        </span>
+                        <span className="ctx-label">{item.label}</span>
+                        {item.submenu && <span className="ctx-caret"><span className="cicon" style={{ "--icon": `url("${chevronRightIcon}")` } as React.CSSProperties} /></span>}
                         {item.hint && <span className="ctx-hint">{item.hint}</span>}
+                        {item.submenu && openSubmenu === item.label && (
+                          <div
+                            className="ctx-menu ctx-submenu"
+                            onMouseLeave={() => {}}
+                          >
+                            {item.submenu.map((sub, j) =>
+                              sub.sep ? (
+                                <div key={`sub-sep-${j}`} className="ctx-sep" />
+                              ) : (
+                                <button
+                                  key={sub.label}
+                                  className="ctx-item"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenMenubar(null);
+                                    setOpenSubmenu(null);
+                                    sub.run?.();
+                                  }}
+                                >
+                                  <span className="ctx-check">
+                                    {sub.avatar ? (
+                                      <img className="ctx-avatar" src={sub.avatar} alt="" />
+                                    ) : null}
+                                  </span>
+                                  <span className="ctx-label">{sub.label}</span>
+                                </button>
+                              )
+                            )}
+                          </div>
+                        )}
                       </button>
                     )
                   )}
@@ -2280,6 +2431,22 @@ export default function App() {
                   <span className="cicon" style={{ "--icon": `url("${openPreviewIcon}")` } as React.CSSProperties} />
                 </button>
               )}
+              {active && (fileExt(active.name) === "csv" || fileExt(active.name) === "tsv") && (
+                <button
+                  className="icon-btn"
+                  title={gridPreviewIds.has(active.id) ? "返回编辑" : "表格预览"}
+                  onClick={() => {
+                    setGridPreviewIds((s2) => {
+                      const n = new Set(s2);
+                      if (n.has(active.id)) n.delete(active.id);
+                      else n.add(active.id);
+                      return n;
+                    });
+                  }}
+                >
+                  <span className="cicon" style={{ "--icon": `url("${openPreviewIcon}")` } as React.CSSProperties} />
+                </button>
+              )}
             </div>
           </div>
           <div
@@ -2355,6 +2522,18 @@ export default function App() {
             <div className="img-view">
               <img src={ghImages.get(active.id)} alt={active.name} />
             </div>
+          ) : DOC_EXTS.has(fileExt(active.name)) ? (
+            docBytes.has(active.id) ? (
+              fileExt(active.name) === "pdf" ? (
+                <Suspense fallback={<div className="loading-pane"><Loader size={22} /></div>}><PdfView data={docBytes.get(active.id)!} filename={active.name} /></Suspense>
+              ) : (
+                <Suspense fallback={<div className="loading-pane"><Loader size={22} /></div>}><DocxView data={docBytes.get(active.id)!} filename={active.name} /></Suspense>
+              )
+            ) : (
+              <div className="loading-pane"><Loader size={22} /></div>
+            )
+          ) : (fileExt(active.name) === "csv" || fileExt(active.name) === "tsv") && gridPreviewIds.has(active.id) ? (
+            <Suspense fallback={<div className="loading-pane"><Loader size={22} /></div>}><CsvTable source={getCachedDoc(active.id, active.content)} filename={active.name} /></Suspense>
           ) : ghBins.has(active.id) ? (
             <div className="bin-view">
               <img className="bin-icon" src={languageFor(active.name).icon} alt="" />
@@ -2495,6 +2674,14 @@ export default function App() {
                   <div className="img-view">
                     <img src={ghImages.get(sf.id)} alt={sf.name} />
                   </div>
+                ) : docBytes.has(sf.id) ? (
+                  fileExt(sf.name) === "pdf" ? (
+                    <Suspense fallback={<div className="loading-pane"><Loader size={22} /></div>}><PdfView data={docBytes.get(sf.id)!} filename={sf.name} /></Suspense>
+                  ) : (
+                    <Suspense fallback={<div className="loading-pane"><Loader size={22} /></div>}><DocxView data={docBytes.get(sf.id)!} filename={sf.name} /></Suspense>
+                  )
+                ) : (fileExt(sf.name) === "csv" || fileExt(sf.name) === "tsv") && gridPreviewIds.has(sf.id) ? (
+                  <Suspense fallback={<div className="loading-pane"><Loader size={22} /></div>}><CsvTable source={getCachedDoc(sf.id, sf.content)} filename={sf.name} /></Suspense>
                 ) : ghBins.has(sf.id) ? (
                   <div className="bin-view">
                     <img className="bin-icon" src={languageFor(sf.name).icon} alt="" />
@@ -2713,7 +2900,11 @@ export default function App() {
       </div>
  
       <footer className="statusbar">
-        {ghTree ? (
+        {ghBusy ? (
+          <span className="status-item">
+            <Loader size={11} /> {ghTree ? `切换到 ${ghBranchInput || ghTree.ref.branch}…` : "正在打开仓库…"}
+          </span>
+        ) : ghTree ? (
           <>
             <button
               className={`status-item status-btn branch-btn${branchMenuOpen ? " open" : ""}`}
@@ -2955,7 +3146,22 @@ export default function App() {
                           <details key={f.filename} className="commit-file">
                             <summary className="commit-file-head">
                               <span className={`commit-file-status ${f.status}`}>{f.status}</span>
-                              <span className="commit-file-name">{f.filename}</span>
+                              <span
+                                role="button"
+                                tabIndex={-1}
+                                title="在编辑器中打开"
+                                className="commit-file-name"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const id = `gh:${f.filename}`;
+                                  if (ghMeta.current.has(id)) {
+                                    openFileSmart(id);
+                                  } else {
+                                    appendLog([{ kind: "err", text: `提交树：${f.filename} 在当前分支不存在（可能已删除或为旧路径）` }]);
+                                  }
+                                }}
+                              >{f.filename}</span>
                               <span className="commit-file-meta">
                                 <span className="add">+{f.additions}</span>
                                 <span className="del">−{f.deletions}</span>
@@ -3165,26 +3371,168 @@ export default function App() {
                       {ghStep === 0 ? "继续" : ghStep === 1 ? (ghTokenInput ? "使用此令牌继续" : "跳过（公开仓库）") : `打开 ${ghRepoInput}`}
                       <span className="hint">Enter</span>
                     </button>
-                    {ghStep === 0 && recents.length > 0 && (
-                      <>
-                        <div className="palette-group">最近打开</div>
-                        {recents.slice(0, 5).map((r) => (
-                          <button
-                            key={`${r.repo}@${r.branch}`}
-                            className="palette-item ghq-action"
-                            onClick={() => {
-                              setGhRepoInput(r.repo);
-                              setGhBranchInput(r.branch);
-                              void openGithubRepo(r.repo, ghTokenInput, r.branch);
-                            }}
-                          >
-                            <span className="cicon" style={{ "--icon": `url("${repoIcon}")` } as React.CSSProperties} />
-                            {r.repo}@{r.branch}
-                            <span className="hint">{relTime(new Date(r.at).toISOString())}</span>
-                          </button>
-                        ))}
-                      </>
-                    )}
+                    {ghStep === 0 && (() => {
+                      const user = ghUser.toLowerCase();
+                      const groups = new Map<string, RecentRepo[]>();
+                      for (const r of recents) {
+                        const owner = r.repo.includes("/") ? r.repo.split("/")[0] : "~";
+                        if (!groups.has(owner)) groups.set(owner, []);
+                        groups.get(owner)!.push(r);
+                      }
+                      const ownerNames = [...groups.keys()].sort((a, b) => {
+                        if (a === user) return -1;
+                        if (b === user) return 1;
+                        return a.localeCompare(b);
+                      });
+                      const LIMIT = 3;
+                      return (
+                        <>
+                          <div className="palette-group">
+                            最近打开
+                            {recents.length > 0 && (
+                              <button type="button" className="palette-clear" onClick={() => { localStorage.removeItem(RECENTS_KEY); setRecents([]); }}>清除</button>
+                            )}
+                          </div>
+                          {ownerNames.map((owner) => {
+                            const list = groups.get(owner)!;
+                            const isSelf = owner === user;
+                            const expanded = !collapsedOwners.has(owner);
+                            const shown = expanded ? list.slice(0, LIMIT) : [];
+                            const hiddenCount = expanded ? list.length - shown.length : 0;
+                            return (
+                              <div key={owner} className={`ghq-sub ${expanded ? "open" : ""}`}>
+                                <button
+                                  className="palette-item ghq-action ghq-owner"
+                                  onClick={() => setCollapsedOwners((c) => { const n = new Set(c); if (n.has(owner)) n.delete(owner); else n.add(owner); return n; })}
+                                >
+                                  {isSelf && ghAvatar
+                                    ? <img className="ghq-avatar" src={ghAvatar} alt="" />
+                                    : <span className="cicon" style={{ "--icon": `url("${repoIcon}")` } as React.CSSProperties} />}
+                                  <span className="ghq-repo-text">{owner}</span>
+                                  {isSelf ? <span className="ghq-repo-self">我的</span> : null}
+                                  <span className="ghq-caret" />
+                                </button>
+                                {expanded && (
+                                  <div className="ghq-sublist">
+                                    {shown.map((r) => (
+                                      <button
+                                        key={`${r.repo}@${r.branch}`}
+                                        className="palette-item ghq-action"
+                                        onClick={() => {
+                                          setGhRepoInput(r.repo);
+                                          setGhBranchInput(r.branch);
+                                          void openGithubRepo(r.repo, ghTokenInput, r.branch);
+                                        }}
+                                      >
+                                        <span className="cicon" style={{ "--icon": `url("${repoIcon}")` } as React.CSSProperties} />
+                                        <span className="ghq-repo-text">{r.repo}</span>
+
+                                      </button>
+                                    ))}
+                                    {hiddenCount > 0 && (
+                                      <button
+                                        className="palette-item ghq-action ghq-more"
+                                        onClick={() => {
+                                          const rest = list.slice(LIMIT).map((r) => `${r.repo}@${r.branch}`);
+                                          const cur = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]") as RecentRepo[];
+                                          const bumped = [
+                                            ...list.slice(LIMIT).map((r) => cur.find((x) => x.repo === r.repo && x.branch === r.branch) ?? r),
+                                            ...cur.filter((x) => !rest.includes(`${x.repo}@${x.branch}`)),
+                                          ];
+                                          localStorage.setItem(RECENTS_KEY, JSON.stringify(bumped));
+                                          setRecents(loadRecents());
+                                        }}
+                                      >
+                                        加载更多（{hiddenCount}）
+                                      </button>
+                                    )}
+                                    {list.length > 1 && (
+                                      <button
+                                        className="palette-item ghq-action ghq-more"
+                                        onClick={() => {
+                                          for (const r of list) removeRecent(r.repo, r.branch);
+                                        }}
+                                      >
+                                        清除 {owner} 的记录
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </>
+                      );
+                    })()}
+                    {ghStep === 0 && ghUser && (() => {
+                      const user = ghUser;
+                      const inRecents = new Set(recents.map(r => r.repo));
+                      const prefix = ghRepoInput.trim().toLowerCase();
+                      const searching = prefix.startsWith(`${user.toLowerCase()}/`) && prefix.length > user.length + 1;
+                      const needle = searching ? prefix.slice(user.length + 1) : "";
+                      let list = userRepos.filter(r => !inRecents.has(r.full_name) && r.full_name.toLowerCase().includes(needle));
+                      if (searching && list.length === 0) list = userRepos.filter(r => !inRecents.has(r.full_name));
+                      const limit = reposLimit;
+                      const shown = list.slice(0, limit);
+                      const hidden = list.length - shown.length;
+                      return (
+                        <>
+                          <div className="palette-group ghq-user-group">
+                            {ghAvatar && <img className="ghq-avatar" src={ghAvatar} alt="" />}
+                            <span>{user.toLowerCase()} 的仓库</span>
+                          </div>
+                          {(() => {
+                            return (
+                              <>
+                                {shown.map((r) => (
+                                  <button key={r.full_name} className="palette-item ghq-action" onClick={() => { setGhRepoInput(r.full_name); setGhBranchInput(r.default_branch); void openGithubRepo(r.full_name, ghTokenInput, r.default_branch); }}>
+                                    <span className="cicon" style={{ "--icon": `url("${repoIcon}")` } as React.CSSProperties} />
+                                    {r.full_name}
+                                    <span className="hint">{r.private ? "private" : "public"}</span>
+                                  </button>
+                                ))}
+                                {hidden > 0 && (
+                                  <button
+                                    className="palette-item ghq-action ghq-more"
+                                    onClick={() => {
+                                      // 先展开本地已有条目；本地条目不足时再向后翻页拉取
+                                      if (list.length > shown.length) {
+                                        setReposLimit(Math.min(list.length, reposLimit + 10));
+                                        window.setTimeout(() => {
+                                          const rows = document.querySelectorAll(".ghq-list .palette-item.ghq-action");
+                                          rows[rows.length - 1]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+                                        }, 60);
+                                        return;
+                                      }
+                                      const token = localStorage.getItem("lumen.gh.token") ?? "";
+                                      const nextPage = userReposPage.current + 1;
+                                      setReposLoading(true);
+                                      void fetch(`https://api.github.com/user/repos?per_page=30&sort=updated&affiliation=owner,collaborator&page=${nextPage}`, {
+                                        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+                                      })
+                                        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+                                        .then((arr: { full_name: string; default_branch: string; private: boolean }[]) => {
+                                          if (!Array.isArray(arr) || arr.length === 0) { setReposLoading(false); return; }
+                                          userReposPage.current = nextPage;
+                                          setUserRepos((cur) => {
+                                            const seen = new Set(cur.map((x) => x.full_name));
+                                            return [...cur, ...arr.filter((x) => !seen.has(x.full_name))];
+                                          });
+                                          setReposLoading(false);
+                                        })
+                                        .catch(() => setReposLoading(false));
+                                    }}
+                                    disabled={reposLoading}
+                                  >
+                                    {reposLoading ? <><Loader size={12} /> 加载中…</> : `加载更多（${hidden}+）`}
+                                  </button>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </>
+                      );
+                    })()}
                   </>
                 )}
               </div>
