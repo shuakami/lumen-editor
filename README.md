@@ -46,8 +46,6 @@ CodeMirror 6 with **30+ languages** out of the box (C, C#, C++, Rust, Python, Ty
 
 ![Word document rendered with table support](docs/screenshots/04-docx.png)
 
-![PDF page 2 of 3 — Monthly Revenue table, Aurora hits highlighted in yellow](docs/screenshots/12-pdf-search-dark.png)
-
 > All four viewers are lazy-loaded: the `docview` module (4 kB gzip) is fetched on first open, and the heavy libraries (`mammoth`, `pdfjs`) load only when you actually open a `.docx` or `.pdf`. **A user who never opens a document never pays for it.**
 
 ---
