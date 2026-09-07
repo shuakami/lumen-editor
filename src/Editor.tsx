@@ -23,6 +23,8 @@ interface EditorProps {
   filename: string;
   initialDoc: string;
   dark: boolean;
+  /** Soft-wrap long lines to the editor width. */
+  wrap?: boolean;
   onDocChange: (fileId: string, doc: string) => void;
   onCursor: (info: CursorInfo) => void;
   /** Set to false to disable autocompletion and suggestion popups. */
@@ -85,14 +87,17 @@ export function openGotoLine(fileId: string): boolean {
   return true;
 }
 
-export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark, onDocChange, onCursor, completions = true }: EditorProps) {
+export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark, wrap = false, onDocChange, onCursor, completions = true }: EditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeCompartment = useRef(new Compartment());
+  const wrapCompartment = useRef(new Compartment());
   const callbacks = useRef({ onDocChange, onCursor });
   callbacks.current.onDocChange = onDocChange;
   callbacks.current.onCursor = onCursor;
   const darkRef = useRef(dark);
+  const wrapRef = useRef(wrap);
+  wrapRef.current = wrap;
   const completionsRef = useRef(completions);
   completionsRef.current = completions;
  
@@ -124,6 +129,7 @@ export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark,
             ? importCompletions(languageFor(filename).id, filename)
             : [],
           themeCompartment.current.of(editorTheme(darkRef.current)),
+          wrapCompartment.current.of(wrapRef.current ? EditorView.lineWrapping : []),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               pendingDoc = update.state.doc;
@@ -169,6 +175,13 @@ export const Editor = memo(function Editor({ fileId, filename, initialDoc, dark,
       effects: themeCompartment.current.reconfigure(editorTheme(dark)),
     });
   }, [dark]);
+
+  useEffect(() => {
+    wrapRef.current = wrap;
+    viewRef.current?.dispatch({
+      effects: wrapCompartment.current.reconfigure(wrap ? EditorView.lineWrapping : []),
+    });
+  }, [wrap]);
  
   return <div ref={hostRef} className="editor-pane" />;
 });

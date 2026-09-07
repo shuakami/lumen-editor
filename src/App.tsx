@@ -407,6 +407,8 @@ export default function App() {
   const [hlIndex, setHlIndex] = useState(0);
   const [dirty, setDirty] = useState<Set<string>>(new Set());
   const [dark, setDark] = useState(() => localStorage.getItem("lumen.theme") === "dark");
+  const [wrap, setWrap] = useState(() => localStorage.getItem("lumen.wrap") === "1");
+  useEffect(() => { localStorage.setItem("lumen.wrap", wrap ? "1" : "0"); }, [wrap]);
   const [files, setFiles] = useState<SampleFile[]>(HAS_SAVED_REPO ? [] : SAMPLE_FILES);
   const [ghRestoring, setGhRestoring] = useState(HAS_SAVED_REPO);
   const [extraFolders, setExtraFolders] = useState<string[]>([]);
@@ -1856,7 +1858,10 @@ export default function App() {
  
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        setWrap((w) => !w);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
       } else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
@@ -1989,6 +1994,7 @@ export default function App() {
         { label: "命令面板…", hint: "Ctrl+K", run: () => setPaletteOpen(true) },
         { label: dark ? "浅色主题" : "深色主题", run: () => setDark((d) => !d) },
         { sep: true },
+        { label: "自动换行", hint: "Alt+Z", checked: wrap, run: () => setWrap((w) => !w) },
         { label: "侧边栏", hint: "Ctrl+B", checked: sidebarOpen, run: () => setSidebarOpen((o) => !o) },
         { label: "拆分编辑器", checked: !!splitId, run: toggleSplit },
         { sep: true },
@@ -2558,6 +2564,7 @@ export default function App() {
               filename={active.dir ? `${active.dir}/${active.name}` : active.name}
               initialDoc={active.content}
               dark={dark}
+              wrap={wrap}
               onDocChange={onDocChange}
               onCursor={onMainCursor}
             />
@@ -2698,6 +2705,7 @@ export default function App() {
                     filename={sf.dir ? `${sf.dir}/${sf.name}` : sf.name}
                     initialDoc={sf.content}
                     dark={dark}
+                    wrap={wrap}
                     onDocChange={onDocChange}
                     onCursor={onSplitCursor}
                   />
