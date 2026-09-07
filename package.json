@@ -93,6 +93,7 @@
   },
   "dependencies": {
     "mammoth": "^1.12.2",
-    "papaparse": "^5.7.0"
+    "papaparse": "^5.7.0",
+    "pdfjs-dist": "^6.3.289"
   }
 }

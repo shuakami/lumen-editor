@@ -311,7 +311,7 @@ function loadPdfLib(): Promise<PdfLib> {
             const doc = await getDoc(data);
             const page = await doc.getPage(page_);
             const content = await page.getTextContent();
-            return content.items.map((it) => ("str" in it ? (it as { str: string }).str : "")).join(" ");
+            return content.items.map((it) => ("str" in it && typeof it.str === "string" ? it.str : "")).join(" ");
           },
           async searchHits(data, page_, needle, scale) {
             const doc = await getDoc(data);
@@ -321,8 +321,11 @@ function loadPdfLib(): Promise<PdfLib> {
             const out: Array<{ x: number; y: number; w: number; h: number }> = [];
             const lower = needle.toLowerCase();
             const items = content.items.flatMap((it) => {
-              if (!("str" in it) || typeof it.str !== "string" || !Array.isArray(it.transform) || it.transform.length !== 6) return [];
-              return [{ str: it.str, transform: it.transform as number[], width: (it as { width?: number }).width ?? 0 }];
+              const str = "str" in it ? it.str : undefined;
+              const transform = "transform" in it ? it.transform : undefined;
+              const width = "width" in it ? it.width : undefined;
+              if (typeof str !== "string" || !Array.isArray(transform) || transform.length !== 6) return [];
+              return [{ str, transform: transform as number[], width: width ?? 0 }];
             });
             const lines = new Map<number, Array<{ str: string; transform: number[]; width: number }>>();
             for (const it of items) {
