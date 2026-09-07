@@ -3376,8 +3376,8 @@ export default function App() {
               }}
             />
             <div className="ghq-hint">
-              在 uapis.cn 注册后获取（uapi- 开头）。仅存于浏览器 localStorage，只发送到 uapis.cn。
-              留空提交可清除。运行需要 key 是因为执行接口不允许匿名跨域调用。
+              可选。uapis.cn 的 API key（uapi- 开头），仅存于浏览器 localStorage，只发送到 uapis.cn。
+              访客有免费额度但浏览器直连需要 key；留空提交可清除。
             </div>
             <div className="ghq-actions">
               <button type="button" className="ghq-btn" onClick={() => setUapiKeyOpen(false)}>取消</button>

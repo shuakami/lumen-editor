@@ -89,22 +89,13 @@ export async function runCode(langId: string, source: string): Promise<RunResult
   if (!language) return { ok: false, compileOutput: "", output: `不支持运行 ${langId}`, code: null };
 
   const key = getUapiKey();
-  if (!key) {
-    return {
-      ok: false,
-      compileOutput: "",
-      output: "尚未配置运行服务密钥。菜单 Run → 运行服务密钥… 填入 uapis.cn 的 API key（uapi- 开头）。",
-      code: null,
-    };
-  }
-
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      headers: key ? { "Content-Type": "application/json", Authorization: `Bearer ${key}` } : { "Content-Type": "application/json" },
       body: JSON.stringify({
         language,
         code: source,
@@ -117,10 +108,25 @@ export async function runCode(langId: string, source: string): Promise<RunResult
   } catch (e) {
     window.clearTimeout(timer);
     const aborted = e instanceof DOMException && e.name === "AbortError";
-    return { ok: false, compileOutput: "", output: aborted ? `请求超时（${REQUEST_TIMEOUT_MS / 1000}s），已取消。` : "无法连接运行服务，请检查网络。", code: null };
+    return {
+      ok: false,
+      compileOutput: "",
+      output: aborted
+        ? `请求超时（${REQUEST_TIMEOUT_MS / 1000}s），已取消。`
+        : `无法连接运行服务（浏览器直连需要 key：菜单 Run → 运行服务密钥…）。`,
+      code: null,
+    };
   }
   window.clearTimeout(timer);
 
+  if (res.status === 403) {
+    let message = "浏览器直连运行服务被拒绝（CORS_FORBIDDEN）。";
+    try {
+      const err = (await res.json()) as UapiErrorBody;
+      if (err.message) message = `${err.message}（菜单 Run → 运行服务密钥… 可填入 key）`;
+    } catch { /* 保留默认信息 */ }
+    return { ok: false, compileOutput: "", output: message, code: null };
+  }
   if (res.status === 413) {
     return { ok: false, compileOutput: "", output: "源代码超出 65536 字节限制。", code: null };
   }
