@@ -5,7 +5,7 @@ import { HyperEditor, HYPER_COUNT } from "./HyperEditor";
 import { SAMPLE_FILES, type SampleFile } from "./samples";
 import { languageFor } from "./editor/languages";
 import { applyCodeScale } from "./editor/scale";
-import { isRunnable, runCode, runCommandLabel } from "./editor/run";
+import { isRunnable, runCode, runCommandLabel, UAPI_KEY_STORAGE, getUapiKey } from "./editor/run";
 import { openRepo, parseRepoInput, fetchBlob, fetchBlobB64, b64ToBytes, listBranches, listCommits, fetchFileAtCommit, fetchCommitDetail, searchCode, type GhTree, type GhBranch, type GhFileDelta, type GhCodeHit, type GhCommit, type GhCommitDetail } from "./github";
 import { SyncEngine, loadSnapshot, saveSnapshot, repoKey, saveDraft, deleteDraft, loadDrafts, draftKey, recordLocalVersion, loadLocalHistory, type LocalVersion, type SyncState } from "./syncengine";
 import { cacheGet, cacheGetMany, cachePut } from "./ghcache";
@@ -437,6 +437,8 @@ export default function App() {
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const [recentSubmenu, setRecentSubmenu] = useState<{ owner: string; repos: string[]; items: CtxItem[] } | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [uapiKeyOpen, setUapiKeyOpen] = useState(false);
+  const [uapiKeyInput, setUapiKeyInput] = useState(() => getUapiKey());
   const [aboutClosing, setAboutClosing] = useState(false);
   const closeAbout = useCallback(() => {
     setAboutClosing(true);
@@ -453,7 +455,7 @@ export default function App() {
   const [ghBusy, setGhBusy] = useState(false);
   const [ghError, setGhError] = useState("");
   const [ghTree, setGhTree] = useState<GhTree | null>(null);
-  const ghMeta = useRef(new Map<string, { path: string; sha: string; baseContent: string; loaded: boolean }>());
+  const ghMeta = useRef(new Map<string, { path: string; sha?: string; baseContent: string; loaded: boolean }>());
   const [ghLoadingId, setGhLoadingId] = useState<string | null>(null);
   const ghInflight = useRef(new Set<string>());
   const [ghLoadedTick, setGhLoadedTick] = useState(0);
@@ -600,17 +602,18 @@ export default function App() {
         setFiles((fs) => fs.map((f) => (f.id === id && f.content === "" ? { ...f, content: meta.baseContent } : f)));
       }
       const tree = ghTreeRef.current;
-      if (!meta || meta.loaded || !tree || ghInflight.current.has(id)) return;
+      if (!meta || meta.loaded || !meta.sha || !tree || ghInflight.current.has(id)) return;
+      const sha = meta.sha;
       ghInflight.current.add(id);
       setGhLoadingId(id);
       void (async () => {
         try {
           const ext = fileExt(meta.path);
           if (IMAGE_EXTS.has(ext)) {
-            let b64 = await cacheGet(meta.sha);
+            let b64 = await cacheGet(sha);
             if (b64 === null) {
-              b64 = await fetchBlobB64(tree.ref, meta.sha);
-              cachePut(meta.sha, b64);
+              b64 = await fetchBlobB64(tree.ref, sha);
+              cachePut(sha, b64);
             }
             const bytes = b64ToBytes(b64);
             const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: IMAGE_MIME[ext] }));
@@ -618,20 +621,20 @@ export default function App() {
             meta.loaded = true;
             setGhLoadedTick((n) => n + 1);
           } else if (DOC_EXTS.has(ext)) {
-            let b64 = await cacheGet(meta.sha);
+            let b64 = await cacheGet(sha);
             if (b64 === null) {
-              b64 = await fetchBlobB64(tree.ref, meta.sha);
-              cachePut(meta.sha, b64);
+              b64 = await fetchBlobB64(tree.ref, sha);
+              cachePut(sha, b64);
             }
             const bytes = b64ToBytes(b64);
             setDocBytes((m) => new Map(m).set(id, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer));
             meta.loaded = true;
             setGhLoadedTick((n) => n + 1);
           } else if (BINARY_EXTS.has(ext)) {
-            let b64 = await cacheGet(meta.sha);
+            let b64 = await cacheGet(sha);
             if (b64 === null) {
-              b64 = await fetchBlobB64(tree.ref, meta.sha);
-              cachePut(meta.sha, b64);
+              b64 = await fetchBlobB64(tree.ref, sha);
+              cachePut(sha, b64);
             }
             const bytes = b64ToBytes(b64);
             const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: "application/octet-stream" }));
@@ -639,10 +642,10 @@ export default function App() {
             meta.loaded = true;
             setGhLoadedTick((n) => n + 1);
           } else {
-            let text = await cacheGet(meta.sha);
+            let text = await cacheGet(sha);
             if (text === null) {
-              text = await fetchBlob(tree.ref, meta.sha);
-              cachePut(meta.sha, text);
+              text = await fetchBlob(tree.ref, sha);
+              cachePut(sha, text);
             }
             meta.baseContent = text;
             meta.loaded = true;
@@ -1460,7 +1463,7 @@ export default function App() {
       setActiveId((cur) => (gone.has(cur) ? "" : cur));
       setSplitId((s) => (s && gone.has(s) ? null : s));
     }
-    const entries = [...ghMeta.current.values()].map((m) => ({ path: m.path, sha: m.sha, size: 0 }));
+    const entries = [...ghMeta.current.values()].filter((m) => m.sha).map((m) => ({ path: m.path, sha: m.sha!, size: 0 }));
     setGhTree((t) => (t ? { ...t, headSha: newHead, entries } : t));
     void saveSnapshot({ key: repoKey(tree.ref), headSha: newHead, entries, updatedAt: Date.now() });
     if (notes.length > 0) appendLog(notes.slice(0, 12).map((text) => ({ kind: "info" as const, text: `同步：${text}` })));
@@ -1705,8 +1708,29 @@ export default function App() {
       if (!name) {
         if (renaming.isNew) setFiles((fs) => fs.filter((f) => f.id !== renaming.id));
       } else {
-        setFiles((fs) => fs.map((f) => (f.id === renaming.id ? { ...f, name } : f)));
-        if (renaming.isNew) openFile(renaming.id);
+        const file = filesById.get(renaming.id);
+        const tree = ghTreeRef.current;
+        if (renaming.isNew && tree && file) {
+          // GitHub 仓库内新建文件：以 gh:<path> 作为文件 ID（与仓库文件一致），
+          // 注册元数据并立即入队远端创建，事务完成后回调能正确更新 sha
+          const path = file.dir ? `${file.dir}/${name}` : name;
+          const ghId = `gh:${path}`;
+          const content = getCachedDoc(renaming.id, file.content);
+          setCachedDoc(ghId, content);
+          ghMeta.current.set(ghId, { path, baseContent: "", loaded: true });
+          setFiles((fs) => [...fs.filter((f) => f.id !== renaming.id), { id: ghId, name, dir: file.dir, content }]);
+          openFile(ghId);
+          void recordLocalVersion(repoKey(tree.ref), path, content, "commit", `Create ${path}`);
+          void engine.current?.enqueue({
+            path,
+            baseContent: "",
+            content,
+            message: `Create ${path}`,
+          });
+        } else {
+          setFiles((fs) => fs.map((f) => (f.id === renaming.id ? { ...f, name } : f)));
+          if (renaming.isNew) openFile(renaming.id);
+        }
       }
     } else {
       if (!name) {
@@ -1717,7 +1741,7 @@ export default function App() {
       }
     }
     setRenaming(null);
-  }, [renaming, renameText, openFile]);
+  }, [renaming, renameText, openFile, filesById]);
  
   const cancelRename = useCallback(() => {
     if (renaming?.isNew) {
@@ -2010,7 +2034,11 @@ export default function App() {
     },
     {
       name: "Run",
-      items: [{ label: running ? "运行中…" : "运行当前文件", hint: "Ctrl+Enter", run: runActive }],
+      items: [
+        { label: running ? "运行中…" : "运行当前文件", hint: "Ctrl+Enter", run: runActive },
+        { sep: true },
+        { label: "运行服务密钥…", run: () => { setUapiKeyInput(getUapiKey()); setUapiKeyOpen(true); } },
+      ],
     },
     {
       name: "Terminal",
@@ -2825,7 +2853,7 @@ export default function App() {
                                 ], "above");
                               }}
                             />
-                            <span className="console-prompt">wandbox:~$</span> {l.text}
+                            <span className="console-prompt">lumen:run$</span> {l.text}
                           </pre>
                         ) : (
                           <pre key={i} className={`console-line ${l.kind}`}>{l.text}</pre>
@@ -2839,7 +2867,7 @@ export default function App() {
                       )}
                       {!running && (
                         <pre className="console-line cmd console-input-line">
-                          <span className="console-prompt">wandbox:~$</span>{" "}
+                          <span className="console-prompt">lumen:run$</span>{" "}
                           <input
                             ref={termInputRef}
                             className="console-input"
@@ -3320,6 +3348,51 @@ export default function App() {
             <div className="about-quote">
               <p>"Programs must be written for people to read, and only incidentally for machines to execute."</p>
               <span className="about-quote-by">— Harold Abelson</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {uapiKeyOpen && (
+        <div className="ghq-overlay" onMouseDown={() => setUapiKeyOpen(false)}>
+          <div className="ghq" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <div className="ghq-titlebar">
+              <span className="ghq-titletext">运行服务密钥</span>
+            </div>
+            <input
+              className="palette-input"
+              type="password"
+              placeholder="uapi-…（uapis.cn 控制台获取）"
+              value={uapiKeyInput}
+              spellCheck={false}
+              autoFocus
+              onChange={(e) => setUapiKeyInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const v = uapiKeyInput.trim();
+                  if (v) localStorage.setItem(UAPI_KEY_STORAGE, v);
+                  else localStorage.removeItem(UAPI_KEY_STORAGE);
+                  setUapiKeyOpen(false);
+                } else if (e.key === "Escape") setUapiKeyOpen(false);
+              }}
+            />
+            <div className="ghq-hint">
+              在 uapis.cn 注册后获取（uapi- 开头）。仅存于浏览器 localStorage，只发送到 uapis.cn。
+              留空提交可清除。运行需要 key 是因为执行接口不允许匿名跨域调用。
+            </div>
+            <div className="ghq-actions">
+              <button type="button" className="ghq-btn" onClick={() => setUapiKeyOpen(false)}>取消</button>
+              <button
+                type="button"
+                className="ghq-btn primary"
+                onClick={() => {
+                  const v = uapiKeyInput.trim();
+                  if (v) localStorage.setItem(UAPI_KEY_STORAGE, v);
+                  else localStorage.removeItem(UAPI_KEY_STORAGE);
+                  setUapiKeyOpen(false);
+                }}
+              >
+                保存
+              </button>
             </div>
           </div>
         </div>
